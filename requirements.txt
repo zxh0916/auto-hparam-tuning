@@ -1,0 +1,5 @@
+tensorboard
+hydra-core==1.3.2
+hydra-optuna-sweeper
+pandas
+tqdm
