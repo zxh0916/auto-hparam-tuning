@@ -269,8 +269,9 @@ def main():
         quantile_low=args.quantile_low,
         quantile_high=args.quantile_high,
     )
-    # Single key → bare object for backward compatibility; multiple keys → array.
-    print(json.dumps(result if len(args.key) > 1 else result[0], indent=2))
+    # Single key → bare object for backward compatibility; multiple keys or "all" → array.
+    single = len(args.key) == 1 and args.key[0] != "all"
+    print(json.dumps(result[0] if single else result, indent=2))
 
 
 def summarize_scalar_curve_from_event(
@@ -299,8 +300,16 @@ def summarize_scalar_curve_from_event(
         A single summary dict when *key* is a string, or a list of summary
         dicts (one per key, in the same order) when *key* is a list.
     """
-    keys = [key] if isinstance(key, str) else key
     df = event2dataframe(event_path)
+    if key == "all" or key == ["all"]:
+        keys = list(df.columns)
+        return_single = False
+    elif isinstance(key, str):
+        keys = [key]
+        return_single = True
+    else:
+        keys = key
+        return_single = False
     results = [
         summarize_scalar_curve(
             df=df,
@@ -313,7 +322,7 @@ def summarize_scalar_curve_from_event(
         )
         for k in keys
     ]
-    return results[0] if isinstance(key, str) else results
+    return results[0] if return_single else results
 
 
 if __name__ == "__main__":
