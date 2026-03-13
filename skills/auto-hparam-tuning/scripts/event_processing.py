@@ -193,6 +193,85 @@ def summarize_scalar_curve(
     }
 
 
+def main():
+    import argparse
+    import json
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Load a TensorBoard event file and print a JSON summary of one scalar curve.\n\n"
+            "The summary includes basic statistics (initial/final/best/worst value and their\n"
+            "steps), trend information (delta, improvement, whether the metric worsened),\n"
+            "robust range (configurable quantiles), and an oscillation score based on the\n"
+            "mean absolute first difference of the (optionally smoothed) curve.\n\n"
+            "The 'best' and 'worst' values are interpreted relative to --mode: for a loss\n"
+            "curve use --mode min so that lower is better; for an accuracy curve use\n"
+            "--mode max so that higher is better."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("event_path", metavar="EVENT_PATH",
+                        help="Path to the TensorBoard event file or the directory containing it.")
+    parser.add_argument("key", metavar="KEY",
+                        help="Scalar tag to summarize (e.g. 'val/loss', 'train/acc').")
+    parser.add_argument(
+        "-m", "--mode",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Optimization direction used to determine best/worst values and the\n"
+            "'improvement' field. Accepted values: 'higher'/'max'/'maximize' or\n"
+            "'lower'/'min'/'minimize'. Required unless the direction is obvious from\n"
+            "context. (default: None — will raise if not provided)"
+        ),
+    )
+    parser.add_argument(
+        "-s", "--smoothing",
+        type=float,
+        default=0.0,
+        metavar="ALPHA",
+        help=(
+            "Exponential moving average smoothing factor in [0, 1). Mirrors the\n"
+            "TensorBoard UI smoothing slider: 0 means no smoothing, values closer\n"
+            "to 1 produce heavier smoothing. All statistics are computed on the\n"
+            "smoothed curve. (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "-ql", "--quantile-low",
+        type=float,
+        default=0.05,
+        dest="quantile_low",
+        metavar="Q",
+        help=(
+            "Lower quantile for the robust range estimate [quantile_low, quantile_high].\n"
+            "Using quantiles instead of the raw min/max makes the range insensitive to\n"
+            "outlier spikes. (default: 0.05)"
+        ),
+    )
+    parser.add_argument(
+        "-qh", "--quantile-high",
+        type=float,
+        default=0.95,
+        dest="quantile_high",
+        metavar="Q",
+        help=(
+            "Upper quantile for the robust range estimate. (default: 0.95)"
+        ),
+    )
+    args = parser.parse_args()
+
+    result = summarize_scalar_curve_from_event(
+        event_path=args.event_path,
+        key=args.key,
+        mode=args.mode,
+        smoothing=args.smoothing,
+        quantile_low=args.quantile_low,
+        quantile_high=args.quantile_high,
+    )
+    print(json.dumps(result, indent=2))
+
+
 def summarize_scalar_curve_from_event(
     event_path: str,
     key: str,
@@ -213,3 +292,7 @@ def summarize_scalar_curve_from_event(
         quantile_high=quantile_high,
         mode=mode,
     )
+
+
+if __name__ == "__main__":
+    main()
