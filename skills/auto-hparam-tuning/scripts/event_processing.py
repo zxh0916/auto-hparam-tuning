@@ -212,8 +212,8 @@ def main():
     )
     parser.add_argument("event_path", metavar="EVENT_PATH",
                         help="Path to the TensorBoard event file or the directory containing it.")
-    parser.add_argument("key", metavar="KEY",
-                        help="Scalar tag to summarize (e.g. 'val/loss', 'train/acc').")
+    parser.add_argument("key", metavar="KEY", nargs="+",
+                        help="One or more scalar tags to summarize (e.g. 'val/loss' 'train/acc').")
     parser.add_argument(
         "-m", "--mode",
         default=None,
@@ -269,29 +269,51 @@ def main():
         quantile_low=args.quantile_low,
         quantile_high=args.quantile_high,
     )
-    print(json.dumps(result, indent=2))
+    # Single key → bare object for backward compatibility; multiple keys → array.
+    print(json.dumps(result if len(args.key) > 1 else result[0], indent=2))
 
 
 def summarize_scalar_curve_from_event(
     event_path: str,
-    key: str,
+    key: str | list[str],
     higher_is_better: bool | None = None,
     smoothing: float = 0.0,
     quantile_low: float = 0.05,
     quantile_high: float = 0.95,
     mode: str | None = None,
-) -> dict[str, Any]:
-    """Load an event file into a dataframe and summarize one scalar curve."""
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """Load an event file into a dataframe and summarize one or more scalar curves.
+
+    Args:
+        event_path: Path to the TensorBoard event file or directory.
+        key: A single scalar tag or a list of tags. When a list is given, the
+            event file is loaded once and each key is summarized in order.
+        higher_is_better: Whether larger values are preferable. Ignored when
+            *mode* is provided.
+        smoothing: EMA smoothing factor in [0, 1). 0 means no smoothing.
+        quantile_low: Lower quantile for the robust range estimate.
+        quantile_high: Upper quantile for the robust range estimate.
+        mode: Optimization direction string ('higher'/'max' or 'lower'/'min').
+
+    Returns:
+        A single summary dict when *key* is a string, or a list of summary
+        dicts (one per key, in the same order) when *key* is a list.
+    """
+    keys = [key] if isinstance(key, str) else key
     df = event2dataframe(event_path)
-    return summarize_scalar_curve(
-        df=df,
-        key=key,
-        higher_is_better=higher_is_better,
-        smoothing=smoothing,
-        quantile_low=quantile_low,
-        quantile_high=quantile_high,
-        mode=mode,
-    )
+    results = [
+        summarize_scalar_curve(
+            df=df,
+            key=k,
+            higher_is_better=higher_is_better,
+            smoothing=smoothing,
+            quantile_low=quantile_low,
+            quantile_high=quantile_high,
+            mode=mode,
+        )
+        for k in keys
+    ]
+    return results[0] if isinstance(key, str) else results
 
 
 if __name__ == "__main__":
