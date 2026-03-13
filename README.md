@@ -53,3 +53,26 @@ pip install -r auto-hparam-tuning/requirements.txt
 - [ ] write a prompt that teaches the agent using hydra
 - [ ] write a prompt guiding the agent to explore the project and understand the hparams (refer to the prompts of `/init` command of coding agents like codex and claude code maybe)
 - [ ] write a prompt that makes the agent filter the hparams according to the command
+
+## Citing
+
+If you find this project useful in your research please cite hydra and AHT using the following BibTeX entry:
+
+```bibtex
+@Misc{Zhang2026AHT,
+  author =       {Xinhong Zhang, Weipu Zhang, Haolin Chen},
+  title =        {AHT: Automatic Hyperparameter Tuning with Coding Agents using Hydra},
+  howpublished = {Github},
+  year =         {2026},
+  url =          {https://github.com/zxh0916/auto-hparam-tuning}
+}
+```
+```bibtex
+@Misc{Yadan2019Hydra,
+  author =       {Omry Yadan},
+  title =        {Hydra - A framework for elegantly configuring complex applications},
+  howpublished = {Github},
+  year =         {2019},
+  url =          {https://github.com/facebookresearch/hydra}
+}
+```
