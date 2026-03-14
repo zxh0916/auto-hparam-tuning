@@ -39,6 +39,56 @@ pip install -r auto-hparam-tuning/requirements.txt
 - Tune the hparam according to the result
 - Start a sweep to search in a smaller hparam space
 - Write tuning logs into disk
+- Create stable AHT session directories under the tuned project, both locally and over SSH
+
+## Session Manager
+
+A lightweight session manager is available at:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py --help
+```
+
+It creates a canonical layout under the **target project**:
+
+```text
+<project_root>/aht/yyyy-mm-dd/hh-mm-ss/
+```
+
+Example for a local project:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py \
+  create-session /path/to/project \
+  --base-command "python train.py task=foo" \
+  --primary-metric val/acc \
+  --goal maximize
+```
+
+Example for a remote project over SSH:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py \
+  --ssh-host user@server \
+  create-session /remote/project/path \
+  --base-command "python train.py task=foo" \
+  --primary-metric val/acc \
+  --goal maximize
+```
+
+Then allocate runs inside that session:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py create-run <session_dir>
+python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server create-run <remote_session_dir>
+```
+
+You can also summarize the accumulated run history with pandas before deciding the next tuning move:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py summarize-results <session_dir>
+python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server summarize-results <remote_session_dir>
+```
 
 ### Additional Features
 

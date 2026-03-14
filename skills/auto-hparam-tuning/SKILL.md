@@ -27,7 +27,7 @@ This skill will automatically the hyperparameters managed by hydra config system
 
     3. Analyze the event file using `scripts/analyze_event.py`.
 
-    4. Record the result of the run in a table and a report and analyze the pattern that lies between the runs.
+    4. Record the result of the run in a table and a report and analyze the pattern that lies between the runs. Use `scripts/session_manager.py` to create and maintain the canonical `aht/yyyy-mm-dd/hh-mm-ss/` directory under the target project, not under the skill repo.
 
     5. Come up with tuning suggestions, review those suggestions, and pick a best one.
 
