@@ -98,14 +98,19 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
      --goal {GOAL}
    → creates {PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/
 
-4. BASELINE RUN:
-   Launch BASE_COMMAND → analyze event file with {SKILL_DIR}/scripts/analyze_event.py
-   → confirm metric keys, establish baseline performance
+4. MICRO-BASELINE RUN:
+   a. CREATE RUN:   session_manager.py create-run {SESSION_DIR}
+   b. Launch BASE_COMMAND with `hydra.run.dir={RUN_DIR}/workspace` AND a runtime truncation knob (e.g., `trainer.max_epochs=2`) to save time.
+   c. Analyze event file with {SKILL_DIR}/scripts/analyze_event.py
+   → confirm metric keys, establish micro-baseline performance
+
+4.5 PLAN STRATEGY:
+   Follow {SKILL_DIR}/prompts/plan_tuning_strategy.md to create `{SESSION_DIR}/strategy.md`
 
 5. TUNING LOOP (up to BUDGET iterations):
-   a. CREATE RUN:   session_manager.py create-run {SESSION_DIR}
-   b. TUNE:         Decide hparam changes, write override.yaml in run dir
-   c. EXECUTE:      Launch training with overrides, capture stdout/stderr
+   a. CREATE RUN:   session_manager.py create-run {SESSION_DIR} (repeat for parallel runs)
+   b. TUNE:         Review strategy.md. Decide hparam changes, write override.yaml in run dir
+   c. EXECUTE:      Launch training with overrides (append `ckpt_path=...` if promoting). Launch in parallel (`&` or `Start-Job`) if compute allows. Capture stdout/stderr.
    d. ANALYZE:      analyze_event.py on event file → curve statistics
    e. RECORD:       session_manager.py update-run with metrics and status
    f. LOG:          session_manager.py append-report with analysis and takeaway
@@ -173,9 +178,9 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
 
 4. Save this note into the session directory as `run_understanding.md` once the session is created.
 
-### Step 3: Create Session and Baseline
+### Step 3: Create Session and Micro-Baseline
 
-**Goal**: Initialize the AHT session directory and establish a baseline.
+**Goal**: Initialize the AHT session directory and establish a short initial baseline to save compute time.
 
 **Actions**:
 1. Create the session:
@@ -188,37 +193,48 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
      --goal {GOAL}
    ```
 
-2. Launch the base command (possibly a short debug run) to verify the setup and identify available metric keys:
+2. Launch the base command with a **runtime truncation knob** appended (e.g., `trainer.max_epochs=1` or `max_steps=500`). This is a "Micro-Baseline" that prevents wasting time on a full standard training run if you only need initial metrics.
    ```bash
    python {SKILL_DIR}/scripts/analyze_event.py {EVENT_PATH} --list-tags
    ```
 
 3. Confirm METRIC and GOAL. Update session meta if they changed.
 
-### Step 4: Tuning Loop
+### Step 4: Plan Strategy
+
+**Goal**: Analyze the baseline and generate a formal roadmap before running blind experiments.
+
+Follow `{SKILL_DIR}/prompts/plan_tuning_strategy.md` to generate `{SESSION_DIR}/strategy.md`.
+
+### Step 5: Tuning Loop
 
 Repeat the following for each iteration until termination conditions are met.
 
-#### 4a. Allocate a Run Directory
+#### 5a. Allocate a Run Directory
 ```bash
 python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] create-run {SESSION_DIR}
 ```
 Returns `run_dir`, `override_path`, `command_path`, `stdout_path`, `stderr_path`.
 
-#### 4b. Decide Hyperparameter Changes
+#### 5b. Decide Hyperparameter Changes
 
-Based on the run understanding, baseline analysis, and accumulated results:
-- Review `summarize-results` output from the previous iteration
-- Apply heuristics: if instability → reduce LR; if plateau → try LR schedule or different optimizer; if overfitting → increase regularization
+Based on the run understanding, `strategy.md` roadmap, and accumulated results:
+- Review `summarize-results` output from the previous iteration.
+- Follow the active phase in your `strategy.md` roadmap.
+- If a phase's hypothesis is proven wrong (e.g., instability, flatline), update `strategy.md` with a pivot plan.
 - Write the chosen Hydra overrides to `override.yaml` in the run directory
 - If remote: upload `override.yaml` to the project config directory
 
-#### 4c. Execute Training
+#### 5c. Execute Training
 
 Launch the training command with overrides. Redirect stdout/stderr to `stdout.log` and `stderr.log` in the run directory. Copy back the event file and Hydra-generated config to `copied/` if remote.
 **Important**: On Windows, you MUST set the environment variable `PYTHONIOENCODING=utf-8` or `PYTHONUTF8=1` for the training process to prevent `UnicodeEncodeError: 'gbk' codec` crashes from tqdm/logging.
 
-#### 4d. Analyze Results
+**Parallel Execution (Adaptive)**: If the system has sufficient compute (e.g., multiple GPUs, or the model is very small/simple like MNIST) and you have planned a "Direct Strategy", you can launch multiple runs concurrently as background processes (e.g. `Start-Process` in PowerShell, or `&` in bash). Wait for them all to finish before analyzing the batch.
+
+**Checkpoint Resuming (Progressive Tuning)**: If you are executing a Phase 2 or Phase 3 run, you MUST resume from the best checkpoint of the corresponding Phase 1 run to save time. Find the checkpoint (e.g., in `runs/{PREV_ID}/workspace/checkpoints/`) and append the checkpoint override to your command (e.g., `ckpt_path=runs/0/workspace/checkpoints/epoch=1.ckpt`).
+
+#### 5d. Analyze Results
 
 Run `analyze_event.py` on the finished run's event file.
 **Tip**: Always redirect temporary output files (e.g., `res.json`) to the run directory (e.g., `runs/{ID}/analysis.json`) or the `aht/` root to maintain workspace hygiene.
@@ -229,7 +245,7 @@ python {SKILL_DIR}/scripts/analyze_event.py {EVENT_PATH} {METRIC} --mode {GOAL}
 
 Inspect the returned statistics: `best_value`, `best_step`, `end_step`, `improvement`, `normalized_oscillation`.
 
-#### 4e. Record the Run
+#### 5e. Record the Run
 
 ```bash
 python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] \
@@ -239,7 +255,7 @@ python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] \
   --best-step {BEST_STEP}
 ```
 
-#### 4f. Log Analysis to Report
+#### 5f. Log Analysis to Report
 
 ```bash
 python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] \
@@ -247,7 +263,7 @@ python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] \
   "## Run {RUN_ID}: {TRIAL_NAME}\n\n**Overrides**: ...\n**Result**: {BEST_VALUE}\n**Analysis**: ..."
 ```
 
-#### 4g. Check Termination
+#### 5g. Check Termination
 
 ```bash
 python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] \
@@ -259,7 +275,7 @@ python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] \
 - Budget (BUDGET iterations) exhausted
 - Objective met
 
-### Step 5: Finalize
+### Step 6: Finalize
 
 ```bash
 python {SKILL_DIR}/scripts/session_manager.py [--ssh-host {SSH_HOST}] \

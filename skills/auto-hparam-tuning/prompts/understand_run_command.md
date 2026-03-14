@@ -56,9 +56,11 @@ Required tasks:
   - loss weights
   - regularization
   - logging / evaluation cadence
+- Identify **Runtime Truncation Knobs**. This is CRITICAL for progressive tuning strategies. How can a run be artificially shortened to save time (e.g., `trainer.max_epochs=2`, `trainer.limit_train_batches=0.1`, `max_steps=5000`)?
 - Separate:
   - good first-round tuning knobs
   - dangerous / expensive knobs that should not be changed early
+  - runtime truncation knobs (for short exploratory runs)
 
 7. Produce concrete command-aware guidance
 - Give 3-8 repo-specific CLI override examples that are relevant to this command.
@@ -75,6 +77,7 @@ Write a concise structured note with these headings:
 ## Relevant Files
 ## Outputs and TensorBoard
 ## Primary Metric Recommendation
+## Runtime Truncation Knobs
 ## Tuning Knobs for This Session
 ## Safe First Actions
 
