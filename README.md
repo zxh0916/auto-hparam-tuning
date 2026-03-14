@@ -1,9 +1,5 @@
 # AHT: Automatic Hyperparameter Tuning with Coding Agents using Hydra
 
-AHT is an agentic experiment optimization framework for Hydra-based ML training projects. It operates in a closed loop:
-
-> **Scan project → Extract hparams → Parse metrics → Diagnose curves → Suggest new params → Run training → Record results → Iterate**
-
 ## Installation
 
 Clone the repo into your global skill directory:
@@ -34,16 +30,44 @@ git clone https://github.com/zxh0916/auto-hparam-tuning.git
 pip install -r auto-hparam-tuning/requirements.txt
 ```
 
-## Core Features
+## Features
 
 - Automatically explore the project and understand the hparams
 - Extract tunable hparams from commands
 - Analyze the critical metrics from the tensorboard event file
 - Judge the run with the metrics
 - Tune the hparam according to the result
-- Start a sweep to search in a smaller hparam space
 - Write tuning logs into disk
 - Create stable AHT session directories under the tuned project, both locally and over SSH
+
+## Usage
+
+This is an **agent skill** — you don't run the scripts manually. Simply tell your coding agent:
+
+> "帮我调一下 `/path/to/my/project` 的超参数，运行命令是 `python train.py task=foo`，目标是最小化 `val/loss`"
+
+The agent will automatically:
+1. Understand the project structure and Hydra configuration
+2. Analyze the run command to identify relevant hparams and expected outputs
+3. Create an AHT session and run baseline training
+4. Analyze training curves and tune hyperparameters iteratively
+5. Generate a final report with the best configuration
+
+### Minimal Trigger
+
+```
+Tune my project at /path/to/project, command: python train.py task=foo
+```
+
+### Full Trigger
+
+```
+Tune hyperparameters for /path/to/project.
+Command: python train.py task=cifar10
+Target metric: val/accuracy (maximize).
+Budget: 15 iterations.
+Remote: user@gpu-server
+```
 
 ## Session Manager
 
@@ -94,118 +118,37 @@ python skills/auto-hparam-tuning/scripts/session_manager.py summarize-results <s
 python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server summarize-results <remote_session_dir>
 ```
 
-### Advanced Features (Planned)
+A lightweight project-understanding flow helper is also available:
 
-- Convert non-Hydra config systems into Hydra-based ones
-- Multi-GPU parallel trial scheduling and resource management
-- Optuna-backed Bayesian optimization via Hydra sweeper
-- Human-in-the-loop approval mode
-- Interactive dashboard for experiment visualization
-- Parameter importance analysis and Pareto frontier
+```bash
+python skills/auto-hparam-tuning/scripts/project_understanding.py inspect-project /path/to/project
+python skills/auto-hparam-tuning/scripts/project_understanding.py prepare-run-understanding /path/to/project "python train.py task=foo"
+python skills/auto-hparam-tuning/scripts/project_understanding.py --ssh-host user@server inspect-project /remote/project/path
+```
 
 ## Architecture
 
 ```
 skills/auto-hparam-tuning/
-├── SKILL.md                          # Agent skill manifest & workflow definition
+├── SKILL.md                              # Agent skill manifest & workflow
 ├── prompts/
-│   ├── get_hparam_structure.md       # Project exploration → HPARAM.md generation
-│   ├── teach_hydra.md                # Hydra framework primer for agents
-│   ├── filter_hparams.md             # Hyperparameter extraction & classification
-│   ├── define_objective.md           # Optimization objective definition
-│   ├── diagnose_curve.md             # Training curve diagnosis interpretation
-│   └── suggest_next_params.md        # Next parameter suggestion engine
+│   ├── generate_project_md.md            # Generate PROJECT.md for the target project
+│   ├── get_hparam_structure.md           # Generate HPARAM.md for Hydra config systems
+│   └── understand_run_command.md         # Session-specific command understanding
 └── scripts/
-    ├── analyze_event.py              # TensorBoard event → curve statistics
-    ├── session_manager.py            # Session/run lifecycle management (local + SSH)
-    ├── scan_project.py               # Project directory → ProjectInfo (JSON)
-    ├── detect_patterns.py            # Curve statistics → diagnostic labels (JSON)
-    ├── run_experiment.py             # Launch training with overrides & capture results
-    ├── run_history.py                # JSONL experiment database (record/list/best)
-    └── report.py                     # History → Markdown experiment report
+    ├── analyze_event.py                  # TensorBoard event → curve statistics
+    ├── project_understanding.py          # Project inspection & understanding flow
+    └── session_manager.py                # Session/run lifecycle management (local + SSH)
 ```
-
-## Usage
-
-This is an **agent skill** — you don't run the scripts manually. Simply tell your coding agent:
-
-> "帮我调一下 `/path/to/my/project` 的超参数，运行命令是 `python train.py task=foo`，目标是最小化 `val/loss`"
-
-The agent will automatically:
-1. Scan your project structure and understand its Hydra configuration
-2. Identify and classify tunable hyperparameters
-3. Create an AHT session and run baseline training
-4. Analyze training curves and diagnose issues
-5. Suggest and execute improved hyperparameter configurations
-6. Iterate until the objective is met or the budget is exhausted
-7. Generate a final report with the best configuration
-
-### Minimal Trigger
-
-```
-Tune my project at /path/to/project, command: python train.py task=foo
-```
-
-The agent discovers the metric and everything else automatically.
-
-### Full Trigger
-
-```
-Tune hyperparameters for /path/to/project.
-Command: python train.py task=cifar10
-Target metric: val/accuracy (maximize).
-Budget: 15 iterations.
-Remote: user@gpu-server
-```
-
-## Script Reference (for developers)
-
-The scripts in `scripts/` are internal tools used by the agent. They can also be run standalone for debugging:
-
-| Script | Purpose |
-|--------|---------|
-| `session_manager.py` | Session/run lifecycle: create-session, create-run, update-run, summarize-results, finalize-session |
-| `analyze_event.py` | Parse TensorBoard event files into curve statistics |
-| `scan_project.py` | Detect project structure (entry points, config dirs, log dirs) |
-| `detect_patterns.py` | Diagnose training curves (divergence, plateau, overfitting, etc.) |
-| `run_experiment.py` | Launch training with Hydra overrides and capture results |
-| `run_history.py` | JSONL-based experiment database (record, list, best) |
-| `report.py` | Generate Markdown experiment reports |
 
 ## Roadmap
 
-### P0: MVP Closed Loop
 - [x] Convert `pd.DataFrame` from TensorBoard event file
-- [x] Write functions to detect patterns from curves
-- [x] Write a prompt that teaches the agent using Hydra
-- [x] Write a prompt guiding the agent to explore the project and understand hparams
-- [x] Write a prompt that filters hparams according to command
-- [x] Implement project structure scanner
-- [x] Implement unified experiment runner
-- [x] Implement run history (JSONL)
-- [x] Implement experiment report generator
-- [x] Complete SKILL.md with full agent workflow
 - [x] Implement session manager with local + SSH support
-
-### P1: Stability & Intelligence
-- [ ] Implement multi-run orchestration with GPU scheduling
-- [ ] Integrate Optuna via Hydra sweeper backend
-- [ ] Add failure-aware tuning (auto-retry, OOM recovery)
-- [ ] Implement reproducibility metadata tracking (package versions, CUDA/driver)
-- [ ] Add early rejection for unpromising trials
-
-### P2: Agentic Advantage
-- [ ] LLM-based tuning explanation generation
-- [ ] Human-in-the-loop approval workflow
-- [ ] Automatic experiment summary reports with insights
-- [ ] Warm-start from previous experiment history
-
-### P3: Productization
-- [ ] Interactive dashboard (CLI + HTML)
-- [ ] Parameter importance analysis
-- [ ] Multi-objective optimization
-- [ ] Non-Hydra to Hydra config conversion assistant
-- [ ] Benchmark suite for validation
+- [x] Project understanding flow (PROJECT.md, HPARAM.md, run command analysis)
+- [ ] Multi-GPU parallel trial scheduling
+- [ ] Optuna-backed Bayesian optimization via Hydra sweeper
+- [ ] Interactive dashboard
 
 ## Citing
 
