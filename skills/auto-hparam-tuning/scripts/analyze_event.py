@@ -1,4 +1,4 @@
-from typing import Any, Literal
+from typing import Any, Literal, Optional, Union
 
 import pandas as pd
 from tensorboard.backend.event_processing import event_accumulator
@@ -27,7 +27,9 @@ def event2dataframe(event_path: str):
     return df
 
 
-def _normalize_opt_mode(higher_is_better: bool | None = None, mode: str | None = None) -> OptimizationMode:
+def _normalize_opt_mode(
+    higher_is_better: Optional[bool] = None, mode: Optional[str] = None
+) -> OptimizationMode:
     """Normalize metric optimization direction into a compact internal literal."""
     if mode is not None:
         normalized = mode.strip().lower()
@@ -78,11 +80,11 @@ def _step_to_python(step: Any) -> Any:
 def summarize_scalar_curve(
     df: pd.DataFrame,
     key: str,
-    higher_is_better: bool | None = None,
+    higher_is_better: Optional[bool] = None,
     smoothing: float = 0.0,
     quantile_low: float = 0.05,
     quantile_high: float = 0.95,
-    mode: str | None = None,
+    mode: Optional[str] = None,
 ) -> dict[str, Any]:
     """
     Compute descriptive statistics for one scalar curve in a dataframe.
@@ -276,13 +278,13 @@ def main():
 
 def summarize_scalar_curve_from_event(
     event_path: str,
-    key: str | list[str],
-    higher_is_better: bool | None = None,
+    key: Union[str, list[str]],
+    higher_is_better: Optional[bool] = None,
     smoothing: float = 0.0,
     quantile_low: float = 0.05,
     quantile_high: float = 0.95,
-    mode: str | None = None,
-) -> dict[str, Any] | list[dict[str, Any]]:
+    mode: Optional[str] = None,
+) -> Union[dict[str, Any], list[dict[str, Any]]]:
     """Load an event file into a dataframe and summarize one or more scalar curves.
 
     Args:
