@@ -111,6 +111,16 @@ tries the baseline first, then one-step neighbors of the current best run, then 
 Instead of appending a SQLite row, it records the run into the active AHT session and updates `results.csv`,
 `metrics.json`, `resolved_config.json`, and `report.md`.
 
+## Project Understanding
+
+A lightweight project-understanding flow helper is also available:
+
+```bash
+python skills/auto-hparam-tuning/scripts/project_understanding.py inspect-project /path/to/project
+python skills/auto-hparam-tuning/scripts/project_understanding.py prepare-run-understanding /path/to/project "python train.py task=foo"
+python skills/auto-hparam-tuning/scripts/project_understanding.py --ssh-host user@server inspect-project /remote/project/path
+```
+
 ### Additional Features
 
 - Convert the non-hydra config system into hydra-based ones
