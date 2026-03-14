@@ -90,6 +90,14 @@ python skills/auto-hparam-tuning/scripts/session_manager.py summarize-results <s
 python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server summarize-results <remote_session_dir>
 ```
 
+A lightweight project-understanding flow helper is also available:
+
+```bash
+python skills/auto-hparam-tuning/scripts/project_understanding.py inspect-project /path/to/project
+python skills/auto-hparam-tuning/scripts/project_understanding.py prepare-run-understanding /path/to/project "python train.py task=foo"
+python skills/auto-hparam-tuning/scripts/project_understanding.py --ssh-host user@server inspect-project /remote/project/path
+```
+
 ### Additional Features
 
 - Convert the non-hydra config system into hydra-based ones
