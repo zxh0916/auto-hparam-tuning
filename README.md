@@ -36,15 +36,63 @@ pip install -r auto-hparam-tuning/requirements.txt
 
 ## Core Features
 
-- **Project Structure Scanning** — Automatically detect training entry points, Hydra config directories, TensorBoard event paths, and checkpoint locations (`scripts/scan_project.py`)
-- **Hyperparameter Extraction & Classification** — Parse Hydra configs to identify tunable parameters, classify types (int/float/bool/categorical), infer search ranges and priorities (`prompts/filter_hparams.md`)
-- **Metric Understanding & Objective Definition** — Determine primary optimization metric, direction (max/min), evaluation strategy, and constraints (`prompts/define_objective.md`)
-- **TensorBoard Event Analysis** — Load event files into DataFrames and compute 25+ curve statistics including trend, oscillation, and robust range (`scripts/analyze_event.py`)
-- **Training Curve Diagnosis** — Automatically detect divergence, instability, plateau, overfitting, underfitting, early saturation, and slow training (`scripts/detect_patterns.py`)
-- **Two-Layer Tuning Policy** — Rule-based deterministic adjustments combined with LLM contextual reasoning for next-parameter suggestions (`prompts/suggest_next_params.md`)
-- **Unified Experiment Runner** — Launch training with Hydra overrides, enforce timeouts, detect OOM/NaN failures (`scripts/run_experiment.py`)
-- **Experiment History Tracking** — JSONL-based run database with git hash, system info, metrics, and diagnosis for full reproducibility (`scripts/run_history.py`)
-- **Automated Report Generation** — Markdown reports with top-k rankings, parameter-result comparison, diagnosis distribution (`scripts/report.py`)
+- Automatically explore the project and understand the hparams
+- Extract tunable hparams from commands
+- Analyze the critical metrics from the tensorboard event file
+- Judge the run with the metrics
+- Tune the hparam according to the result
+- Start a sweep to search in a smaller hparam space
+- Write tuning logs into disk
+- Create stable AHT session directories under the tuned project, both locally and over SSH
+
+## Session Manager
+
+A lightweight session manager is available at:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py --help
+```
+
+It creates a canonical layout under the **target project**:
+
+```text
+<project_root>/aht/yyyy-mm-dd/hh-mm-ss/
+```
+
+Example for a local project:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py \
+  create-session /path/to/project \
+  --base-command "python train.py task=foo" \
+  --primary-metric val/acc \
+  --goal maximize
+```
+
+Example for a remote project over SSH:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py \
+  --ssh-host user@server \
+  create-session /remote/project/path \
+  --base-command "python train.py task=foo" \
+  --primary-metric val/acc \
+  --goal maximize
+```
+
+Then allocate runs inside that session:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py create-run <session_dir>
+python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server create-run <remote_session_dir>
+```
+
+You can also summarize the accumulated run history with pandas before deciding the next tuning move:
+
+```bash
+python skills/auto-hparam-tuning/scripts/session_manager.py summarize-results <session_dir>
+python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server summarize-results <remote_session_dir>
+```
 
 ### Advanced Features (Planned)
 
@@ -68,9 +116,10 @@ skills/auto-hparam-tuning/
 │   ├── diagnose_curve.md             # Training curve diagnosis interpretation
 │   └── suggest_next_params.md        # Next parameter suggestion engine
 └── scripts/
-    ├── analyze_event.py              # TensorBoard event → curve statistics (JSON)
-    ├── detect_patterns.py            # Curve statistics → diagnostic labels (JSON)
+    ├── analyze_event.py              # TensorBoard event → curve statistics
+    ├── session_manager.py            # Session/run lifecycle management (local + SSH)
     ├── scan_project.py               # Project directory → ProjectInfo (JSON)
+    ├── detect_patterns.py            # Curve statistics → diagnostic labels (JSON)
     ├── run_experiment.py             # Launch training with overrides & capture results
     ├── run_history.py                # JSONL experiment database (record/list/best)
     └── report.py                     # History → Markdown experiment report
@@ -80,12 +129,12 @@ skills/auto-hparam-tuning/
 
 This is an **agent skill** — you don't run the scripts manually. Simply tell your coding agent:
 
-> "帮我调一下 `/path/to/my/project` 的超参数，目标是最小化 `val/loss`"
+> "帮我调一下 `/path/to/my/project` 的超参数，运行命令是 `python train.py task=foo`，目标是最小化 `val/loss`"
 
 The agent will automatically:
 1. Scan your project structure and understand its Hydra configuration
 2. Identify and classify tunable hyperparameters
-3. Run baseline training if needed
+3. Create an AHT session and run baseline training
 4. Analyze training curves and diagnose issues
 5. Suggest and execute improved hyperparameter configurations
 6. Iterate until the objective is met or the budget is exhausted
@@ -94,7 +143,7 @@ The agent will automatically:
 ### Minimal Trigger
 
 ```
-Tune my project at /path/to/project
+Tune my project at /path/to/project, command: python train.py task=foo
 ```
 
 The agent discovers the metric and everything else automatically.
@@ -103,31 +152,25 @@ The agent discovers the metric and everything else automatically.
 
 ```
 Tune hyperparameters for /path/to/project.
+Command: python train.py task=cifar10
 Target metric: val/accuracy (maximize).
-Budget: 15 iterations, 2h timeout per trial.
+Budget: 15 iterations.
+Remote: user@gpu-server
 ```
 
 ## Script Reference (for developers)
 
 The scripts in `scripts/` are internal tools used by the agent. They can also be run standalone for debugging:
 
-| Script | Purpose | Example |
-|--------|---------|---------|
-| `scan_project.py` | Detect project structure | `python scripts/scan_project.py --project /path` |
-| `analyze_event.py` | Parse TensorBoard events | `python scripts/analyze_event.py event_file val/loss --mode min` |
-| `detect_patterns.py` | Diagnose training curves | `python scripts/detect_patterns.py event_file val/loss --mode min` |
-| `run_experiment.py` | Launch training with overrides | `python scripts/run_experiment.py --project /path --entry train.py --overrides "lr=0.001"` |
-| `run_history.py` | Record/query experiment history | `python scripts/run_history.py record --project /path --run-name test --metrics '{}'` |
-| `report.py` | Generate experiment report | `python scripts/report.py --project /path --metric val/accuracy --mode max` |
-
-## Operating Modes
-
-| Mode | Description |
-|------|-------------|
-| `manual-assist` | Analyze and suggest, user executes manually |
-| `rule-based-auto` | Deterministic rule-based adjustments, auto-execute |
-| `llm-guided-auto` | LLM reasoning guides parameter selection, auto-execute |
-| `optuna-backed-auto` | Bayesian optimization via Hydra Optuna sweeper |
+| Script | Purpose |
+|--------|---------|
+| `session_manager.py` | Session/run lifecycle: create-session, create-run, update-run, summarize-results, finalize-session |
+| `analyze_event.py` | Parse TensorBoard event files into curve statistics |
+| `scan_project.py` | Detect project structure (entry points, config dirs, log dirs) |
+| `detect_patterns.py` | Diagnose training curves (divergence, plateau, overfitting, etc.) |
+| `run_experiment.py` | Launch training with Hydra overrides and capture results |
+| `run_history.py` | JSONL-based experiment database (record, list, best) |
+| `report.py` | Generate Markdown experiment reports |
 
 ## Roadmap
 
@@ -142,6 +185,7 @@ The scripts in `scripts/` are internal tools used by the agent. They can also be
 - [x] Implement run history (JSONL)
 - [x] Implement experiment report generator
 - [x] Complete SKILL.md with full agent workflow
+- [x] Implement session manager with local + SSH support
 
 ### P1: Stability & Intelligence
 - [ ] Implement multi-run orchestration with GPU scheduling

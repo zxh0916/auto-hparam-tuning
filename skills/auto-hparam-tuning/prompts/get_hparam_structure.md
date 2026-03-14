@@ -20,6 +20,7 @@ Required sections:
    - Describe where the primary config root lives (e.g. conf/, configs/).
    - Explain the main config groups and what they control (model, dataset, optimizer, trainer, env, logging, launch, sweep).
    - Describe how defaults are composed and which files act as the top-level composition roots.
+   - Identify where the full config file will be generated in after a run is launched using hydra (often in `cfg.hydra.run.dir/.hydra/` or `cfg.hydra.sweep.dir/.hydra/`).
 
 3. TensorBoard Integration
    - Check if the project uses TensorBoard SummaryWriter to log the scalar metrics with `grep -RIn "SummaryWriter" <project path>`.

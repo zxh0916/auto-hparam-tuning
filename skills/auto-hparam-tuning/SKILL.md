@@ -3,15 +3,22 @@ name: auto-hparam-tuning
 description: Understand and automatically tune the hyperparameters of a project that uses hydra, with respect to the specified metric(s).
 ---
 
-# AHT: Automatic Hyperparameter Tuning Skill
+# Automatic Hyperparameter Tuning
+
+Automatically tune the hyperparameters of a learning process: fetch results from tensorboard, analyze with pandas and numpy, then tune with hydra.
 
 ## Overview
 
-You are the AHT (Automatic Hyperparameter Tuning) agent. Your job is to **autonomously** tune hyperparameters for Hydra-based machine learning projects. You operate in a closed loop:
+You are the AHT (Automatic Hyperparameter Tuning) agent. Given a project with hydra-based hyperparameter structure, you **autonomously** execute a closed-loop tuning cycle:
 
-> **Scan project → Extract hparams → Parse metrics → Diagnose curves → Suggest new params → Run training → Record results → Iterate**
+1. Walk through the project and detect the entry script, main config file, and hparam structure.
+2. Given a running command from the user, identify the task and related hyperparameters.
+3. Trigger a test run to get metric keys from the tensorboard event file.
+4. With respect to a major metric (user-specified or auto-selected), recognize which hparams influence the metric by reading code and observing patterns as you change them.
+5. After each run, log the result, analysis, and applied changes in a report.
+6. Repeat the `[run → analyze → log → tune]` loop for a user-specified number of iterations, then report the final result.
 
-**You execute the entire pipeline yourself. The user only provides a project path and optionally a target metric. You handle everything else — never ask the user to run commands.**
+**You execute the entire pipeline yourself. The user only provides a project path, a running command, and optionally a target metric. You handle everything else — never ask the user to run commands.**
 
 ## When to Activate
 
@@ -29,13 +36,13 @@ All relative paths in this document refer to the **skill directory** — the dir
 - Scripts: `{SKILL_DIR}/scripts/`
 - Prompts: `{SKILL_DIR}/prompts/`
 
-When executing scripts or reading prompts, resolve `{SKILL_DIR}` to the actual absolute path on disk based on where you read this file from. For example, if this file is at `/home/user/.openclaw/skills/auto-hparam-tuning/skills/auto-hparam-tuning/SKILL.md`, then `{SKILL_DIR}` = `/home/user/.openclaw/skills/auto-hparam-tuning/skills/auto-hparam-tuning`.
+When executing scripts or reading prompts, resolve `{SKILL_DIR}` to the actual absolute path on disk based on where you read this file from.
 
 ## Prerequisites
 
 Ensure the following Python packages are installed on the workstation where training runs:
 ```
-tensorboard, hydra-core>=1.3, hydra-optuna-sweeper, pandas, tqdm
+tensorboard, hydra-core>=1.3, pandas, tqdm
 ```
 Install via: `pip install -r {SKILL_DIR}/../../requirements.txt`
 
@@ -48,285 +55,239 @@ If a required package is missing when you first run a script, install prerequisi
 ### Required Input
 
 Extract from the user's message:
-- **PROJECT_DIR** (required): Absolute path to the target training project
+- **PROJECT_DIR** (required): Path to the target training project (local or remote via SSH)
+- **BASE_COMMAND** (required): The training command (e.g., `python train.py task=foo`)
 - **METRIC** (optional): Target metric name (e.g., `val/loss`, `val/accuracy`)
-- **MODE** (optional): Optimization direction — `max` or `min`
+- **GOAL** (optional): Optimization direction — `maximize` or `minimize`
 - **BUDGET** (optional): Maximum tuning iterations (default: 10)
-- **TIMEOUT** (optional): Per-trial timeout in seconds (default: 7200)
+- **SSH_HOST** (optional): SSH host for remote projects (e.g., `user@server`)
 
-If `PROJECT_DIR` is not provided, ask the user for it — this is the **only** question you should need to ask. All other parameters will be discovered automatically during the pipeline.
+If `PROJECT_DIR` or `BASE_COMMAND` is not provided, ask the user — these are the **only** questions you should need to ask. All other parameters will be discovered automatically.
 
 ### Pipeline Algorithm
 
 ```
 resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
 
-1. LEARN:      Read {SKILL_DIR}/prompts/teach_hydra.md
-2. SCAN:       python {SKILL_DIR}/scripts/scan_project.py → ProjectInfo JSON
-               Follow {SKILL_DIR}/prompts/get_hparam_structure.md → HPARAM.md
-3. EXTRACT:    Follow {SKILL_DIR}/prompts/filter_hparams.md → hparam_space.yaml
-4. OBJECTIVE:  Follow {SKILL_DIR}/prompts/define_objective.md → objective.yaml
-               (auto-discover metric from event files if user didn't specify)
-5. BASELINE:   If no prior runs exist → run default config as baseline
+1. LEARN:     Read {SKILL_DIR}/prompts/teach_hydra.md (Hydra primer)
+2. SCAN:      Follow {SKILL_DIR}/prompts/get_hparam_structure.md → HPARAM.md
+              Run {SKILL_DIR}/scripts/scan_project.py (if available) for extra metadata
+3. HPARAMS:   Follow {SKILL_DIR}/prompts/filter_hparams.md → identify tunable hparams
+4. SESSION:   python {SKILL_DIR}/scripts/session_manager.py create-session
+              → creates {PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/ with meta, results, report
+5. TEST RUN:  Launch base command → identify metric keys from event file
 6. LOOP (up to BUDGET iterations):
-   a. ANALYZE:    analyze_event.py + detect_patterns.py on latest run
-   b. DIAGNOSE:   Follow diagnose_curve.md to interpret
-   c. SUGGEST:    Follow suggest_next_params.md to propose trials
-   d. EXECUTE:    run_experiment.py per trial, run_history.py to record
-   e. TERMINATE?: Stop if objective met / budget exhausted / <1% gain × 3 rounds
-7. REPORT:     report.py → present final results to user
+   a. CREATE RUN:  session_manager.py create-run → allocate run directory + override.yaml
+   b. TUNE:        Decide hparam changes, write override.yaml
+   c. EXECUTE:     Launch training with overrides
+   d. ANALYZE:     analyze_event.py on event file → curve statistics
+   e. RECORD:      session_manager.py update-run with metrics
+   f. DIAGNOSE:    Follow diagnose_curve.md to interpret results
+   g. LOG:         session_manager.py append-report with analysis
+   h. TERMINATE?:  session_manager.py summarize-results → check trend
+                   Stop if objective met / budget exhausted / <1% gain × 3 rounds
+7. FINALIZE:  session_manager.py finalize-session → present final report
 ```
 
 ### Operating Principles
 
 1. **Run everything yourself** — use Shell tools to execute scripts, use Read to follow prompt instructions
 2. **Never ask the user to run commands** — you are the executor of all scripts, analysis, and experiments
-3. **Minimize interruptions** — only pause to ask the user if a critical decision truly cannot be inferred (e.g., genuinely ambiguous metric with no way to guess)
+3. **Minimize interruptions** — only pause to ask the user if a critical decision truly cannot be inferred
 4. **Report progress** — briefly inform the user at key milestones (scan complete, iteration N result, final report)
-5. **Handle errors autonomously** — consult the Error Handling section and attempt recovery before reporting failures to the user
+5. **Handle errors autonomously** — consult the Error Handling section and attempt recovery before reporting failures
 
 ## Core Workflow
 
-Follow these steps in order. Each step has a corresponding prompt or script.
+### Step 1: Walk Through the Project
 
-### Step 1: Scan Project Structure
-
-**Goal**: Understand the target project's layout, config system, and training infrastructure.
+**Goal**: Understand the project's hparam structure, entry points, and config system.
 
 **Actions**:
-1. Read `{SKILL_DIR}/prompts/teach_hydra.md` to ensure you understand Hydra concepts.
-2. Follow the instructions in `{SKILL_DIR}/prompts/get_hparam_structure.md` on the target project directory.
-   - This generates an `HPARAM.md` file at the project root describing entry points, config topology, TensorBoard integration, override semantics, and sweep orchestration.
-3. Run the scanner script:
-   ```bash
-   python {SKILL_DIR}/scripts/scan_project.py --project {PROJECT_DIR}
-   ```
-   This produces a `ProjectInfo` JSON with:
-   - Training entry file path
-   - Hydra config root directory
-   - Default config file
-   - Log / checkpoint / TensorBoard directories
-4. Read both `HPARAM.md` and the `ProjectInfo` JSON to build your understanding. These are your reference for all subsequent steps.
+1. Read `{SKILL_DIR}/prompts/teach_hydra.md` to understand Hydra concepts.
+2. Follow `{SKILL_DIR}/prompts/get_hparam_structure.md` on the target project:
+   - Generates `HPARAM.md` at the project root describing entry points, config topology, TensorBoard integration, override semantics, and sweep orchestration.
+   - If the project is remote, copy HPARAM.md back locally.
+3. Optionally run `{SKILL_DIR}/scripts/scan_project.py --project {PROJECT_DIR}` for machine-readable metadata.
 
-### Step 2: Extract and Classify Hyperparameters
+### Step 2: Identify Task and Hyperparameters
 
-**Goal**: Identify which hyperparameters are worth tuning and define their search spaces.
+**Goal**: Given the user's running command, identify the task and related hparams.
 
 **Actions**:
 1. Read and follow `{SKILL_DIR}/prompts/filter_hparams.md` to:
-   - Parse the project's Hydra config files and CLI overrides
-   - Classify each parameter into: core optimization, model architecture, training strategy, or non-tunable
-   - Determine type (int / float / bool / categorical) and scale (linear / log)
-   - Assign tuning priority (high / medium / low / skip)
-2. Output a structured `hparam_space.yaml` at `{PROJECT_DIR}/hparam_space.yaml`:
-   ```yaml
-   hyperparameters:
-     - name: optimizer.lr
-       type: float
-       low: 1e-5
-       high: 1e-2
-       log: true
-       priority: high
-       category: core_optimization
-     - name: model.dropout
-       type: float
-       low: 0.0
-       high: 0.5
-       log: false
-       priority: medium
-       category: core_optimization
-   ```
+   - Parse the project's Hydra config files and the user's CLI overrides
+   - Classify parameters: core optimization, model architecture, training strategy, or non-tunable
+   - Determine type, scale, search range, and tuning priority
+2. Record the tunable hparams for use in subsequent iterations.
 
-### Step 3: Define Optimization Objective
+### Step 3: Create Session and Test Run
 
-**Goal**: Establish what metric to optimize and how to evaluate success.
+**Goal**: Initialize the AHT session and run a test to discover available metrics.
 
 **Actions**:
-1. Read and follow `{SKILL_DIR}/prompts/define_objective.md` to determine:
-   - The primary metric (e.g., `val/accuracy`, `val/loss`)
-   - Optimization direction (`max` or `min`)
-   - Evaluation strategy (`best`, `final`, or `rolling_average`)
-   - Secondary metrics and constraints (e.g., max GPU memory, max training time)
-2. If the user specified METRIC and MODE, use those directly — no need to ask.
-3. If not specified, and TensorBoard events from a previous run exist, inspect available scalar tags and infer the most likely primary metric automatically.
-4. Output `{PROJECT_DIR}/objective.yaml`:
-   ```yaml
-   objective:
-     primary: val/accuracy
-     mode: max
-     eval_strategy: best
-     secondary:
-       - metric: train_time
-         mode: min
-     constraints:
-       max_gpu_memory_gb: 24
-       max_epochs: 100
+1. Create an AHT session:
+   ```bash
+   python {SKILL_DIR}/scripts/session_manager.py \
+     [--ssh-host {SSH_HOST}] \
+     create-session {PROJECT_DIR} \
+     --base-command "{BASE_COMMAND}" \
+     --primary-metric {METRIC} \
+     --goal {GOAL}
+   ```
+   This creates the canonical session layout under `{PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/`.
+
+2. Launch the base command as a test run to identify metric keys from the tensorboard event file.
+3. Use `{SKILL_DIR}/scripts/analyze_event.py` to inspect the event file and discover available scalar tags.
+4. If the user didn't specify METRIC, auto-select the most appropriate primary metric from the discovered tags.
+
+### Step 4: Tuning Loop
+
+**Goal**: Iteratively tune hyperparameters by running experiments and analyzing results.
+
+For each iteration:
+
+#### 4a. Create Run Directory
+```bash
+python {SKILL_DIR}/scripts/session_manager.py \
+  [--ssh-host {SSH_HOST}] \
+  create-run {SESSION_DIR}
+```
+This creates `runs/<N>/` with `override.yaml`, `command.sh`, `metrics.json`, `summary.md`.
+
+#### 4b. Decide Tuning Changes
+
+Read and follow `{SKILL_DIR}/prompts/suggest_next_params.md` (or use your own reasoning based on `{SKILL_DIR}/prompts/diagnose_curve.md`):
+- Apply the rule-based layer for deterministic adjustments based on diagnosis
+- Apply LLM reasoning for contextual prioritization
+- Write the chosen overrides into `override.yaml` in the run directory
+- Upload to the remote config directory if working over SSH
+
+#### 4c. Execute Training
+
+Launch the training command with overrides. Capture stdout/stderr.
+
+#### 4d. Analyze Results
+
+Copy back the event file and config file, then analyze:
+```bash
+python {SKILL_DIR}/scripts/analyze_event.py {EVENT_PATH} {METRIC} --mode {GOAL}
+```
+
+#### 4e. Record and Diagnose
+
+1. Update the run result:
+   ```bash
+   python {SKILL_DIR}/scripts/session_manager.py \
+     [--ssh-host {SSH_HOST}] \
+     update-run {SESSION_DIR} {RUN_ID} \
+     --status finished \
+     --primary-metric {METRIC_VALUE} \
+     --best-step {BEST_STEP}
+   ```
+2. Follow `{SKILL_DIR}/prompts/diagnose_curve.md` to interpret the training curve.
+3. Append analysis to the session report:
+   ```bash
+   python {SKILL_DIR}/scripts/session_manager.py \
+     [--ssh-host {SSH_HOST}] \
+     append-report {SESSION_DIR} "## Run {RUN_ID}\n\n{ANALYSIS}"
    ```
 
-### Step 4: Run Baseline Experiment (if needed)
+#### 4f. Check Termination
 
-**Goal**: Establish a baseline if no prior runs exist.
+Summarize accumulated results:
+```bash
+python {SKILL_DIR}/scripts/session_manager.py \
+  [--ssh-host {SSH_HOST}] \
+  summarize-results {SESSION_DIR}
+```
+**Stop** if:
+- Objective met (target metric reached desired level)
+- Budget exhausted (iteration count ≥ BUDGET)
+- `trend_hint` is `"flat"` or `"degrading"` for 3+ consecutive rounds
+- Less than 1% improvement for 3 consecutive iterations
+
+Otherwise, return to **4a** for the next iteration.
+
+### Step 5: Finalize
+
+**Goal**: Close the session and present results.
 
 **Actions**:
-1. Check if TensorBoard event files already exist in the project's log directory.
-2. If none exist, launch a baseline training run with the project's default config:
+1. Finalize the session:
    ```bash
-   python {SKILL_DIR}/scripts/run_experiment.py \
-     --project {PROJECT_DIR} \
-     --entry {TRAIN_SCRIPT} \
-     --config-dir {CONFIG_DIR} \
-     --run-name baseline \
-     --timeout {TIMEOUT}
+   python {SKILL_DIR}/scripts/session_manager.py \
+     [--ssh-host {SSH_HOST}] \
+     finalize-session {SESSION_DIR} completed
    ```
-3. Record the baseline:
-   ```bash
-   python {SKILL_DIR}/scripts/run_history.py record \
-     --project {PROJECT_DIR} \
-     --run-name baseline \
-     --metrics '{...extracted metrics JSON...}' \
-     --diagnosis baseline
-   ```
-
-### Step 5: Analyze Training Results
-
-**Goal**: Extract metrics and diagnose training behavior from the latest run.
-
-**Actions**:
-1. Locate the TensorBoard event file from the completed run.
-2. Compute curve statistics:
-   ```bash
-   python {SKILL_DIR}/scripts/analyze_event.py {EVENT_PATH} {METRIC} --mode {MODE}
-   ```
-3. Detect diagnostic patterns:
-   ```bash
-   python {SKILL_DIR}/scripts/detect_patterns.py {EVENT_PATH} {METRIC} --mode {MODE}
-   ```
-   Outputs diagnostic labels: `divergence`, `instability`, `plateau`, `overfitting`, `underfitting`, `early_saturation`, `slow_training`, or `healthy`.
-4. Read and follow `{SKILL_DIR}/prompts/diagnose_curve.md` to interpret the statistics and diagnostics in the context of the specific project, providing human-readable explanations.
-
-### Step 6: Suggest Next Hyperparameters
-
-**Goal**: Based on diagnostics, propose the next set of hyperparameters to try.
-
-**Actions**:
-1. Read and follow `{SKILL_DIR}/prompts/suggest_next_params.md` which implements a two-layer decision system:
-
-   **Rule Layer** (deterministic, stable):
-   - `divergence` → reduce learning rate by 3-10x
-   - `plateau` → try local perturbation sweep around current best
-   - `overfitting` → increase dropout / weight_decay / data augmentation
-   - `underfitting` → increase model capacity / reduce regularization
-   - `instability` → reduce learning rate, increase batch size, enable gradient clipping
-   - `slow_training` → increase learning rate / batch size
-   - `early_saturation` → try learning rate warmup or cosine schedule
-
-   **LLM Layer** (contextual reasoning):
-   - Explain why each adjustment is recommended
-   - Prioritize which parameters to change first
-   - Consider project-specific context from HPARAM.md
-
-2. Output a list of proposed trial configs as Hydra overrides:
-   ```yaml
-   trials:
-     - name: "reduce_lr"
-       overrides:
-         optimizer.lr: 0.0003
-       rationale: "Training shows instability. Reducing LR from 0.001 to 0.0003."
-     - name: "increase_dropout"
-       overrides:
-         model.dropout: 0.3
-       rationale: "Generalization gap detected. Increasing dropout."
-   ```
-
-3. In `manual-assist` mode only, present the proposals to the user for approval. In all other modes, proceed directly.
-
-### Step 7: Execute Experiments and Record Results
-
-**Goal**: Run the proposed trials and track everything.
-
-**Actions**:
-1. For each approved trial:
-   ```bash
-   python {SKILL_DIR}/scripts/run_experiment.py \
-     --project {PROJECT_DIR} \
-     --entry {TRAIN_SCRIPT} \
-     --overrides "optimizer.lr=0.0003" \
-     --run-name {TRIAL_NAME} \
-     --timeout {TIMEOUT}
-   ```
-2. Record each run:
-   ```bash
-   python {SKILL_DIR}/scripts/run_history.py record \
-     --project {PROJECT_DIR} \
-     --run-name {TRIAL_NAME} \
-     --config '{"optimizer.lr": 0.0003}' \
-     --metrics '{"val/accuracy": 0.87}' \
-     --diagnosis {DIAGNOSIS_LABEL}
-   ```
-3. After all trials complete, generate an interim report:
-   ```bash
-   python {SKILL_DIR}/scripts/report.py --project {PROJECT_DIR} --top-k 5
-   ```
-
-### Step 8: Iterate
-
-**Goal**: Continue the optimization loop until termination conditions are met.
-
-**Actions**:
-1. Compare results across all recorded runs.
-2. **Terminate** if any of these conditions is met:
-   - The objective has been met (target metric reached desired level)
-   - The iteration budget (`BUDGET`) is exhausted
-   - Less than 1% improvement for 3 consecutive iterations
-3. If not terminating, return to **Step 5** with the new results and repeat the loop.
-4. Each iteration should narrow the search space based on accumulated evidence.
-5. When the loop ends, generate the final report and present results to the user.
-
-## Operating Modes
-
-The skill supports four tuning modes. Default to `llm-guided-auto` unless the user specifies otherwise:
-
-| Mode | Description |
-|------|-------------|
-| `manual-assist` | Analyze and suggest, but never run experiments automatically. Present proposed commands for user to execute. |
-| `rule-based-auto` | Apply deterministic rule-based adjustments and run experiments automatically. |
-| `llm-guided-auto` | Use LLM reasoning to guide parameter selection and run automatically. **(default)** |
-| `optuna-backed-auto` | Delegate search to Optuna via Hydra sweeper for systematic Bayesian optimization. |
+2. Present the final report to the user, including:
+   - Best configuration found
+   - Metric progression across iterations
+   - Key insights and diagnosis history
 
 ## Error Handling
 
 Handle these errors autonomously before escalating to the user:
 
-- **Event file not found**: Run a baseline experiment (Step 4) automatically.
-- **Metric not found**: List available scalar tags and select the most likely primary metric. Ask the user only if truly ambiguous.
-- **Training crash (exit code ≠ 0)**: Record the failure, inspect stderr, apply fix (e.g., reduce batch size for OOM), and retry.
+- **Event file not found**: Run a baseline experiment with the base command first.
+- **Metric not found**: List available scalar tags from the event file and select the most likely primary metric. Ask the user only if truly ambiguous.
+- **Training crash (exit code ≠ 0)**: Record the failure via `update-run --status failed`, inspect stderr, apply fix (e.g., reduce batch size for OOM), and retry.
 - **OOM error**: Automatically reduce batch size by half (or increase gradient accumulation) and retry.
 - **Config invalid**: Validate Hydra overrides with `--cfg job` before launching. Fix syntax errors.
 - **Timeout**: Record partial results if event file exists. Consider reducing epochs or enabling early stopping.
+- **SSH failure**: Retry the remote operation. If persistent, report to user.
+
+## Session Layout
+
+Each tuning session creates a canonical directory structure:
+
+```
+{PROJECT_DIR}/aht/
+└── yyyy-mm-dd/
+    └── hh-mm-ss/
+        ├── meta.yaml          # Session metadata (project, command, metric, goal, status)
+        ├── results.csv        # Run results table (run_id, status, primary_metric, ...)
+        ├── report.md          # Accumulated analysis report
+        └── runs/
+            ├── 0/
+            │   ├── override.yaml   # Hydra overrides for this run
+            │   ├── command.sh      # Exact training command
+            │   ├── stdout.log      # Training stdout
+            │   ├── stderr.log      # Training stderr
+            │   ├── metrics.json    # Extracted metrics
+            │   ├── summary.md      # Run summary and takeaway
+            │   └── copied/         # Copied event files and configs
+            ├── 1/
+            │   └── ...
+            └── ...
+```
 
 ## File Conventions
 
-- Skill prompts: `{SKILL_DIR}/prompts/` — self-contained markdown instruction sets for the agent to follow internally
-- Skill scripts: `{SKILL_DIR}/scripts/` — standalone Python CLI tools for the agent to execute
-- Experiment history: `{PROJECT_DIR}/aht_history.jsonl`
-- Generated reports: `{PROJECT_DIR}/aht_report.md`
-- Hyperparameter space: `{PROJECT_DIR}/hparam_space.yaml`
-- Optimization objective: `{PROJECT_DIR}/objective.yaml`
+- Skill prompts: `{SKILL_DIR}/prompts/` — instruction sets for the agent to follow internally
+- Skill scripts: `{SKILL_DIR}/scripts/` — standalone Python CLI tools
+  - `analyze_event.py` — TensorBoard event → curve statistics
+  - `session_manager.py` — Session/run lifecycle management (local + SSH)
+  - `scan_project.py` — Project structure scanner (if available)
+  - `detect_patterns.py` — Curve diagnosis (if available)
+- Session data: `{PROJECT_DIR}/aht/` — all session directories and run data
 - Project understanding: `{PROJECT_DIR}/HPARAM.md`
 
 ## Quick Reference
 
 ```
-User: "帮我调一下 /home/user/my_project 的超参数，目标是最小化 val/loss"
+User: "帮我调一下 /home/user/my_project 的超参数，
+       运行命令是 python train.py task=cifar10，目标是最小化 val/loss"
 
 Agent 自动执行:
-1. 扫描 /home/user/my_project → 生成 HPARAM.md + ProjectInfo
-2. 识别可调超参: lr, batch_size, dropout, weight_decay, num_layers
-3. 设定目标: val/loss, mode=min
-4. 发现已有事件文件 → 分析 baseline: val/loss=0.45, step 8000 处 plateau
-5. 建议: 将 lr 从 1e-3 降至 3e-4, 添加 cosine schedule
-6. 执行试验 → val/loss 降至 0.38
-7. 记录结果, 建议下一轮迭代
-8. 经过 5 轮: 最佳 val/loss=0.31, lr=2e-4, dropout=0.2, weight_decay=1e-4
-9. 生成最终报告并呈现给用户
+1. 扫描项目 → 生成 HPARAM.md, 识别可调超参
+2. 创建 session → /home/user/my_project/aht/2026-03-14/17-30-00/
+3. 测试运行 → 发现 val/loss, val/acc, train/loss 等 metric
+4. 分析 baseline: val/loss=0.45, plateau at step 8000
+5. 创建 run 0 → override.yaml: lr=3e-4, 执行 → val/loss=0.38
+6. 创建 run 1 → override.yaml: lr=2e-4, dropout=0.2 → val/loss=0.33
+7. 创建 run 2 → override.yaml: lr=2e-4, dropout=0.2, wd=1e-4 → val/loss=0.31
+8. summarize-results: trend=improving, best=run 2
+9. 经过 5 轮: best val/loss=0.31, finalize session
+10. 呈现最终报告给用户
 ```
