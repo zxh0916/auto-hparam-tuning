@@ -10,6 +10,7 @@ from pathlib import PurePosixPath
 from typing import Any, Literal
 
 import pandas as pd
+from omegaconf import OmegaConf
 
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
@@ -116,7 +117,6 @@ class Storage:
         raise NotImplementedError
 
 
-
 class LocalStorage(Storage):
     def mkdir(self, path: str) -> None:
         from pathlib import Path
@@ -155,7 +155,6 @@ class LocalStorage(Storage):
         if not p.exists():
             return []
         return sorted(child.name for child in p.iterdir())
-
 
 
 class SSHStorage(Storage):
@@ -200,8 +199,6 @@ class SSHStorage(Storage):
     def list_dir_names(self, path: str) -> list[str]:
         return list(self._call({"action": "list_dir_names", "path": path})["names"])
 
-
-
 def _stringify(value: Any) -> str:
     if value is None:
         return ""
@@ -209,33 +206,11 @@ def _stringify(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False)
     return str(value)
 
-
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
-
-def _render_yaml(data: dict[str, Any]) -> str:
-    lines = []
-    for key, value in data.items():
-        lines.append(f"{key}: {_yaml_scalar(value)}")
-    return "\n".join(lines) + "\n"
-
-
-def _yaml_scalar(value: Any) -> str:
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    text = str(value)
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
 def _default_storage(target: TargetSpec) -> Storage:
     return SSHStorage(target.ssh_host) if target.is_remote else LocalStorage()
-
 
 def _load_results_dataframe(storage: Storage, results_path: str, columns: list[str]) -> pd.DataFrame:
     if storage.exists(results_path):
@@ -251,7 +226,6 @@ def _load_results_dataframe(storage: Storage, results_path: str, columns: list[s
         if col not in df.columns:
             df[col] = ""
     return df[columns].fillna("")
-
 
 def _write_results_dataframe(storage: Storage, results_path: str, df: pd.DataFrame, columns: list[str]) -> None:
     normalized = df.copy()
@@ -326,11 +300,8 @@ def summarize_results(
     inferred_goal = goal
     meta_text = storage.read_text(meta_path) if storage.exists(meta_path) else ""
     if inferred_goal is None and meta_text:
-        for line in meta_text.splitlines():
-            if line.startswith("goal:"):
-                raw = line.split(":", 1)[1].strip().strip('"')
-                inferred_goal = raw or None
-                break
+        meta_cfg = OmegaConf.create(meta_text)
+        inferred_goal = meta_cfg.get("goal") or None
     if inferred_goal is None:
         inferred_goal = "maximize"
 
@@ -474,7 +445,7 @@ def create_session(
         "storage": "ssh" if ssh_host else "local",
         "ssh_host": ssh_host,
     }
-    storage.write_text(_join(session_dir, "meta.yaml"), _render_yaml(meta))
+    storage.write_text(_join(session_dir, "meta.yaml"), OmegaConf.to_yaml(OmegaConf.create(meta)))
 
     return {
         "project_root": project_root,
@@ -582,31 +553,12 @@ def finalize_session(
 ) -> dict[str, Any]:
     storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
     meta_path = _join(session_dir, "meta.yaml")
-    text = storage.read_text(meta_path)
-    lines = text.splitlines()
-    updated = []
-    replaced_status = False
-    replaced_notes = False
-    has_ended_at = False
-    for line in lines:
-        if line.startswith("status:"):
-            updated.append(f'status: "{status}"')
-            replaced_status = True
-        elif line.startswith("notes:") and notes is not None:
-            updated.append(f"notes: {_yaml_scalar(notes)}")
-            replaced_notes = True
-        elif line.startswith("ended_at:"):
-            updated.append(f"ended_at: {_yaml_scalar(ended_at or _now_iso())}")
-            has_ended_at = True
-        else:
-            updated.append(line)
-    if not replaced_status:
-        updated.append(f'status: "{status}"')
-    if notes is not None and not replaced_notes:
-        updated.append(f"notes: {_yaml_scalar(notes)}")
-    if not has_ended_at:
-        updated.append(f"ended_at: {_yaml_scalar(ended_at or _now_iso())}")
-    storage.write_text(meta_path, "\n".join(updated) + "\n")
+    cfg = OmegaConf.create(storage.read_text(meta_path))
+    cfg.status = status
+    if notes is not None:
+        cfg.notes = notes
+    cfg.ended_at = ended_at or _now_iso()
+    storage.write_text(meta_path, OmegaConf.to_yaml(cfg))
     return {"meta_yaml": meta_path, "status": status}
 
 
