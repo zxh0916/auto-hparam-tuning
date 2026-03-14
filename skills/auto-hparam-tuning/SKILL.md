@@ -53,26 +53,33 @@ If a required package is missing, install it automatically before retrying.
 
 Extract from the user's message:
 - **PROJECT_DIR** (required): Path to the target training project (local or remote via SSH)
-- **BASE_COMMAND** (required): The training command (e.g., `python train.py task=foo`)
+- **BASE_COMMAND** (optional): The training command (e.g., `python train.py task=foo`) — auto-detected if omitted
 - **METRIC** (optional): Target metric name — auto-discovered from event file if not specified
 - **GOAL** (optional): `maximize` or `minimize` — inferred from metric name if not specified
 - **BUDGET** (optional): Maximum tuning iterations (default: 10)
 - **SSH_HOST** (optional): SSH host for remote projects
 
-If `PROJECT_DIR` or `BASE_COMMAND` is not provided, ask the user — these are the **only** questions you may need to ask.
+If `PROJECT_DIR` is not provided, ask the user — it is the **only** question you may need to ask.
+If `BASE_COMMAND` is not provided, run `detect-run-command` (Step 0 below) to auto-detect it.
 
 ### Pipeline Algorithm
 
 ```
 resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
 
+0. AUTO-DETECT RUN COMMAND (skip if BASE_COMMAND already provided):
+   python {SKILL_DIR}/scripts/project_understanding.py detect-run-command {PROJECT_DIR}
+   → returns best_command, best_script, confidence, and top-5 candidates
+   → Use best_command as BASE_COMMAND if confidence is "high" or "medium"
+   → If confidence is "low", ask the user to confirm or provide BASE_COMMAND
+
 1. UNDERSTAND PROJECT:
    a. python {SKILL_DIR}/scripts/project_understanding.py inspect-project {PROJECT_DIR}
       → tells you which docs exist, what needs to be generated, and which prompts to use
-   b. Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing
-      → creates PROJECT.md (general project onboarding guide)
-   c. Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing
-      → creates HPARAM.md (Hydra config and hparam guide)
+   b. Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing in `aht/`
+      → creates `{PROJECT_DIR}/aht/PROJECT.md` (general project onboarding guide)
+   c. Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing in `aht/`
+      → creates `{PROJECT_DIR}/aht/HPARAM.md` (Hydra config and hparam guide)
 
 2. UNDERSTAND RUN COMMAND:
    a. python {SKILL_DIR}/scripts/project_understanding.py prepare-run-understanding
@@ -112,11 +119,14 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
 
 ### Operating Principles
 
-1. **Run everything yourself** — use Shell tools to execute scripts, Read to follow prompt instructions
-2. **Never ask the user to run commands** — you are the executor
-3. **Minimize interruptions** — only pause if a critical decision cannot be inferred
-4. **Report progress** — briefly inform the user at key milestones
-5. **Handle errors autonomously** — attempt recovery before escalating
+- **Run everything yourself** — use Shell tools to execute scripts, Read to follow prompt instructions
+- **Never ask the user to run commands** — you are the executor
+- **Minimize interruptions** — only pause if a critical decision cannot be inferred
+- **Autonomous but Docile**: The agent drives the loop, but logs every decision and result into the `aht/` folder.
+- **Project Isolation**: Do not modify project source code unless fixing a bug that prevents training. All tuning happens via Hydra command-line overrides.
+- **Workspace Hygiene**: All generated documentation (`PROJECT.md`, `HPARAM.md`), session metadata, and temporary analysis files (`.json`, `.txt`) MUST be stored inside the `{PROJECT_ROOT}/aht/` directory. Never pollute the project root with temporary artifacts.
+- **Report progress** — briefly inform the user at key milestones
+- **Handle errors autonomously** — attempt recovery before escalating
 
 ## Core Workflow
 
@@ -133,11 +143,11 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
    ```
    Returns `need_generate_project_md`, `need_generate_hparam_md`, `read_order`, and prompt paths.
 
-2. Read existing docs in the order specified by `read_order` (CLAUDE.md, AGENTS.md, PROJECT.md, HPARAM.md).
+2. Read existing docs in the order specified by `read_order` (CLAUDE.md, AGENTS.md, `aht/PROJECT.md`, `aht/HPARAM.md`).
 
-3. If `need_generate_project_md` is true, follow `{SKILL_DIR}/prompts/generate_project_md.md` to create `PROJECT.md` at the project root.
+3. If `need_generate_project_md` is true, follow `{SKILL_DIR}/prompts/generate_project_md.md` to create `PROJECT.md` inside `{PROJECT_DIR}/aht/`. (Create the `aht/` folder first if it doesn't exist).
 
-4. If `need_generate_hparam_md` is true, follow `{SKILL_DIR}/prompts/get_hparam_structure.md` to create `HPARAM.md`.
+4. If `need_generate_hparam_md` is true, follow `{SKILL_DIR}/prompts/get_hparam_structure.md` to create `HPARAM.md` inside `{PROJECT_DIR}/aht/`.
 
 ### Step 2: Understand the Run Command
 
@@ -206,8 +216,12 @@ Based on the run understanding, baseline analysis, and accumulated results:
 #### 4c. Execute Training
 
 Launch the training command with overrides. Redirect stdout/stderr to `stdout.log` and `stderr.log` in the run directory. Copy back the event file and Hydra-generated config to `copied/` if remote.
+**Important**: On Windows, you MUST set the environment variable `PYTHONIOENCODING=utf-8` or `PYTHONUTF8=1` for the training process to prevent `UnicodeEncodeError: 'gbk' codec` crashes from tqdm/logging.
 
 #### 4d. Analyze Results
+
+Run `analyze_event.py` on the finished run's event file.
+**Tip**: Always redirect temporary output files (e.g., `res.json`) to the run directory (e.g., `runs/{ID}/analysis.json`) or the `aht/` root to maintain workspace hygiene.
 
 ```bash
 python {SKILL_DIR}/scripts/analyze_event.py {EVENT_PATH} {METRIC} --mode {GOAL}
@@ -256,7 +270,8 @@ Present the final report to the user: best configuration, metric progression, ke
 
 ## Error Handling
 
-- **Event file not found**: Run a baseline with the original command. If still missing, check TensorBoard integration in `HPARAM.md`.
+- **UnicodeEncodeError / GBK codec error**: This happens frequently on Windows due to progress bars. Relaunch the training or analysis command with the environment variable `PYTHONUTF8=1` or `PYTHONIOENCODING=utf-8`.
+- **Event file not found**: Run a baseline with the original command. If still missing, check TensorBoard integration in `aht/HPARAM.md`.
 - **Metric not found**: Use `analyze_event.py --list-tags` to list available tags. Select the best candidate.
 - **Training crash**: Record failure via `update-run --status failed`. Inspect stderr. Apply fix (OOM → halve batch size; NaN → reduce LR + add gradient clipping). Retry.
 - **Config invalid**: Validate overrides with `python entrypoint.py --cfg job` before launching.
@@ -291,7 +306,7 @@ User: "帮我调一下 /home/user/my_project 的超参数，
 
 Agent 自动执行:
 1. inspect-project → need_generate_project_md=true, need_generate_hparam_md=true
-2. 生成 PROJECT.md 和 HPARAM.md
+2. 生成 AHT 专属项目文档（放在 `aht/` 目录下）：`aht/PROJECT.md` 和 `aht/HPARAM.md`
 3. prepare-run-understanding → 分析 train.py + conf/config.yaml + task/cifar10.yaml
 4. 确认 metric=val/loss, goal=minimize, 关键 hparams: lr, dropout, weight_decay
 5. create-session → /home/user/my_project/aht/2026-03-14/17-30-00/

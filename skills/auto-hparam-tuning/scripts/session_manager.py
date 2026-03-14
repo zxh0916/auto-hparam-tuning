@@ -373,10 +373,10 @@ def summarize_results(
         best_row = metric_df.iloc[0]
         for _, row in metric_df.head(max(top_k, 0)).iterrows():
             top_runs.append({
-                "run_id": row["run_id_int"],
+                "run_id": int(row["run_id_int"]),
                 "status": row["status"],
-                "primary_metric": row["primary_metric_float"],
-                "best_step": row["best_step_int"],
+                "primary_metric": float(row["primary_metric_float"]),
+                "best_step": int(row["best_step_int"]) if pd.notna(row["best_step_int"]) else None,
                 "run_dir": row["run_dir"],
                 "notes": row["notes"],
             })
@@ -384,10 +384,10 @@ def summarize_results(
     recent_runs: list[dict[str, Any]] = []
     for _, row in working.tail(max(recent_k, 0)).iterrows():
         recent_runs.append({
-            "run_id": row["run_id_int"],
+            "run_id": int(row["run_id_int"]) if pd.notna(row["run_id_int"]) else None,
             "status": row["status"],
-            "primary_metric": row["primary_metric_float"],
-            "best_step": row["best_step_int"],
+            "primary_metric": float(row["primary_metric_float"]) if pd.notna(row["primary_metric_float"]) else None,
+            "best_step": int(row["best_step_int"]) if pd.notna(row["best_step_int"]) else None,
             "run_dir": row["run_dir"],
             "notes": row["notes"],
         })
@@ -420,8 +420,8 @@ def summarize_results(
         "latest_run_id": _safe_int(latest_row["run_id"]),
         "latest_status": latest_row["status"],
         "latest_primary_metric": _safe_float(latest_row["primary_metric"]),
-        "best_run_id": None if best_row is None else best_row["run_id_int"],
-        "best_primary_metric": None if best_row is None else best_row["primary_metric_float"],
+        "best_run_id": None if best_row is None else int(best_row["run_id_int"]),
+        "best_primary_metric": None if best_row is None else float(best_row["primary_metric_float"]),
         "best_run_status": None if best_row is None else best_row["status"],
         "top_runs": top_runs,
         "recent_runs": recent_runs,

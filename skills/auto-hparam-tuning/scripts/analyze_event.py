@@ -198,6 +198,13 @@ def summarize_scalar_curve(
 def main():
     import argparse
     import json
+    import sys
+    
+    if sys.stdout.encoding.lower() != 'utf-8':
+        try:
+            sys.stdout.reconfigure(encoding='utf-8')
+        except AttributeError:
+            pass
 
     parser = argparse.ArgumentParser(
         description=(

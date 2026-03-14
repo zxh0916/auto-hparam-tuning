@@ -6,8 +6,8 @@ Produce a concise but high-value session-specific understanding of what this com
 Inputs you should assume are available:
 - project root
 - run command
-- any existing project-level docs such as `CLAUDE.md`, `AGENTS.md`, or `PROJECT.md`
-- any existing hyperparameter structure guide such as `HPARAM.md`
+- any existing project-level docs such as `CLAUDE.md`, `AGENTS.md`, or `aht/PROJECT.md`
+- any existing hyperparameter structure guide such as `aht/HPARAM.md`
 
 Scope rule:
 Do not try to summarize the whole repository again. Start from the given run command and trace outward only as needed.

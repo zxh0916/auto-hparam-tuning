@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -127,8 +128,8 @@ def inspect_project(project_root: str, ssh_host: str | None = None) -> dict[str,
         "claude_md": _join(project_root, "CLAUDE.md"),
         "agents_md": _join(project_root, "AGENTS.md"),
         "agent_md": _join(project_root, "AGENT.md"),
-        "project_md": _join(project_root, "PROJECT.md"),
-        "hparam_md": _join(project_root, "HPARAM.md"),
+        "project_md": _join(project_root, "aht", "PROJECT.md"),
+        "hparam_md": _join(project_root, "aht", "HPARAM.md"),
     }
     docs = {
         name: {"path": path, "exists": storage.exists(path)}
@@ -153,9 +154,9 @@ def inspect_project(project_root: str, ssh_host: str | None = None) -> dict[str,
             "understand_run_command": str(PROMPTS_DIR / "understand_run_command.md"),
         },
         "next_steps": [
-            "Read existing project-level docs in read_order.",
-            "If need_generate_project_md is true, use sessions_spawn with prompts/generate_project_md.md to create PROJECT.md at the target project root.",
-            "If need_generate_hparam_md is true, use the hyperparameter-structure prompt to create HPARAM.md.",
+            "If need_generate_project_md is true, use sessions_spawn with prompts/generate_project_md.md to create PROJECT.md in the aht/ folder (create it if needed).",
+            "If need_generate_hparam_md is true, use the hyperparameter-structure prompt to create HPARAM.md in the aht/ folder.",
+            "Otherwise, read existing project-level docs in the order specified by read_order.",
             "Then run the command-specific understanding prompt for the current session.",
         ],
     }
@@ -172,11 +173,131 @@ def prepare_run_understanding(project_root: str, run_command: str, ssh_host: str
         "available_context_files": available_context,
         "required_prompt": inspection["prompts"]["understand_run_command"],
         "execution_outline": [
-            "Ensure project-level docs and HPARAM.md exist or are generated first.",
+            "Ensure project-level docs and HPARAM.md exist in the aht/ directory or are generated first.",
             "Read the available context files listed above.",
             "Run prompts/understand_run_command.md with the given project root and run command.",
             "Save the resulting note into the active AHT session as a session-specific understanding artifact.",
         ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# detect_run_command  – heuristic auto-discovery of the training entry point
+# ---------------------------------------------------------------------------
+
+_ENTRY_NAME_PATTERNS = [
+    r"^train\.py$",
+    r"^main\.py$",
+    r"^run\.py$",
+    r"^run_training\.py$",
+    r"^train_.*\.py$",
+    r"^main_.*\.py$",
+]
+
+_HYDRA_IMPORT_RE = re.compile(r"hydra", re.IGNORECASE)
+_HYDRA_DECORATOR_RE = re.compile(r"@hydra\.main|hydra\.initialize|hydra\.compose", re.IGNORECASE)
+_CONFIG_NAME_RE = re.compile(r'config_name\s*=\s*["\']([^"\']+)["\']')
+_CONFIG_PATH_RE = re.compile(r'config_path\s*=\s*["\']([^"\']+)["\']')
+
+
+def _score_entry(rel_path: str, content: str) -> int:
+    """Return a confidence score for this file being the main training entrypoint."""
+    score = 0
+    name = Path(rel_path).name.lower()
+    for pat in _ENTRY_NAME_PATTERNS:
+        if re.match(pat, name):
+            score += 30
+            break
+    # Reward files closer to the project root (fewer path segments)
+    depth = rel_path.replace("\\", "/").count("/")
+    score += max(0, 20 - depth * 5)
+    if _HYDRA_DECORATOR_RE.search(content):
+        score += 50
+    elif _HYDRA_IMPORT_RE.search(content):
+        score += 20
+    if "if __name__" in content:
+        score += 10
+    return score
+
+
+def _suggest_command(project_root: str, rel_path: str, content: str) -> str:
+    """Build a suggested run command from the entry script and its Hydra config hints."""
+    # Normalise to forward-slashes for the shell command
+    script = rel_path.replace("\\", "/")
+    # Try to find logger config-group override hint
+    config_name_m = _CONFIG_NAME_RE.search(content)
+    config_name = config_name_m.group(1) if config_name_m else None
+
+    cmd = f"python {script}"
+    # Almost all hydra+tb projects want `logger=tensorboard` when logging
+    cmd += " logger=tensorboard"
+    return cmd
+
+
+def detect_run_command(project_root: str, ssh_host: str | None = None) -> dict[str, Any]:
+    """Scan a project directory to auto-detect the Hydra training entry point and
+    suggest a BASE_COMMAND, so the user doesn't need to specify one manually.
+
+    Returns a dict with:
+      - candidates: list of {rel_path, score, suggested_command, config_name, config_path}
+      - best_command: the top-ranked suggested command
+      - best_script: relative path of the top-ranked entry script
+      - confidence: "high" | "medium" | "low"
+      - note: human-readable summary
+    """
+    storage = _storage(StorageTarget(project_root=project_root, ssh_host=ssh_host))
+    # Glob for all .py files (depth-limited to avoid digging into venvs/node_modules)
+    all_py = storage.glob(project_root, ["*.py", "*/*.py", "*/*/*.py"])
+
+    candidates = []
+    for abs_path in all_py:
+        # Skip obvious non-entrypoints
+        rel = abs_path[len(project_root):].lstrip("/\\") if abs_path.startswith(project_root) else abs_path
+        lower = rel.lower().replace("\\", "/")
+        if any(skip in lower for skip in ["test", "setup.py", "conf", "__init__", ".egg"]):
+            continue
+        try:
+            content = storage.read_text(abs_path)
+        except Exception:
+            continue
+        score = _score_entry(rel, content)
+        if score < 20:
+            continue
+        config_name_m = _CONFIG_NAME_RE.search(content)
+        config_path_m = _CONFIG_PATH_RE.search(content)
+        candidates.append({
+            "rel_path": rel,
+            "score": score,
+            "suggested_command": _suggest_command(project_root, rel, content),
+            "config_name": config_name_m.group(1) if config_name_m else None,
+            "config_path": config_path_m.group(1) if config_path_m else None,
+        })
+
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+
+    if not candidates:
+        return {
+            "project_root": project_root,
+            "candidates": [],
+            "best_command": None,
+            "best_script": None,
+            "confidence": "low",
+            "note": "No Python entry point with Hydra usage detected. Please specify BASE_COMMAND manually.",
+        }
+
+    best = candidates[0]
+    confidence = "high" if best["score"] >= 70 else ("medium" if best["score"] >= 40 else "low")
+    return {
+        "project_root": project_root,
+        "candidates": candidates[:5],  # top-5
+        "best_command": best["suggested_command"],
+        "best_script": best["rel_path"],
+        "confidence": confidence,
+        "note": (
+            f"Auto-detected entry point: '{best['rel_path']}' (score={best['score']}, confidence={confidence}). "
+            f"Suggested command: {best['suggested_command']!r}. "
+            "Review candidates list and override if needed."
+        ),
     }
 
 
@@ -194,6 +315,12 @@ def parse_args() -> argparse.Namespace:
     p_prepare.add_argument("project_root")
     p_prepare.add_argument("run_command")
 
+    p_detect = subparsers.add_parser(
+        "detect-run-command",
+        help="Auto-detect the Hydra training entry point and suggest a BASE_COMMAND.",
+    )
+    p_detect.add_argument("project_root")
+
     return parser.parse_args()
 
 
@@ -207,6 +334,8 @@ def main() -> None:
             run_command=args.run_command,
             ssh_host=args.ssh_host,
         )
+    elif args.command == "detect-run-command":
+        result = detect_run_command(project_root=args.project_root, ssh_host=args.ssh_host)
     else:
         raise ProjectUnderstandingError(f"Unsupported command: {args.command}")
     print(json.dumps(result, ensure_ascii=False, indent=2))

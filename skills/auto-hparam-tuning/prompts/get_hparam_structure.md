@@ -1,4 +1,4 @@
-Generate a file named HPARAM.md that serves as an agent operating guide for the project repository, and place the HPARAM.md under the root of the project repo (copy to the remote if exploring project in a remote machine). Use English.
+Generate a file named HPARAM.md that serves as an agent operating guide for the project repository, and place the HPARAM.md under the `aht/` directory in the project repo (create `aht/` if it doesn't exist; copy to the remote if exploring project in a remote machine). Use English.
 
 Primary goal:
 Produce a concise but high-value guide that helps future coding agents quickly understand how this project repository is configured, run, and experimentally controlled. If the project repository uses Hydra, OmegaConf, or other layered config systems, prioritize documenting the hyperparameter/configuration system over generic project repository tour content.

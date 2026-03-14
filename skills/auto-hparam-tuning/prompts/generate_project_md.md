@@ -1,4 +1,4 @@
-Generate a file named PROJECT.md that serves as an agent onboarding guide for the target project repository, and place the PROJECT.md under the root of the project repo (copy to the remote if exploring a project on a remote machine). Use English.
+Generate a file named PROJECT.md that serves as an agent onboarding guide for the target project repository, and place the PROJECT.md under the `aht/` directory in the project repo (create `aht/` if it doesn't exist; copy to the remote if exploring a project on a remote machine). Use English.
 
 Your goal is to produce a clear, concise, and high-value project guide for future coding agents. Prefer concrete repository-specific facts backed by files you actually inspected. Keep the document concise, but cover the parts that matter for understanding, running, and modifying the project.
 
