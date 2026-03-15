@@ -228,3 +228,21 @@ def default_storage(target: TargetSpec) -> Storage:
 
 def join(root: str, *parts: str) -> str:
     return str(PurePosixPath(root, *parts))
+
+def get_sessions_spawn_command(label: str, task: str):
+    args = {
+        "task": task,
+        "runtime": "subagent",
+        "label": label,
+        "agentId": "your agentId",
+        "mode": "run",
+        "cleanup": "delete",
+        "thinking": "low"
+    }
+    command = "sessions_spawn("
+    for i, (k, v) in enumerate(args.items()):
+        command = command + f"{k}=\"{v}\""
+        if i != len(args) - 1:
+            command = command + ", "
+    command = command + ")"
+    return command
