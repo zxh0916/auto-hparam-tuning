@@ -18,7 +18,8 @@ Then modify your openclaw config:
       ]
     },
     "entries": {
-      "auto-hparam-tuning": { "enabled": true }
+      "auto-hparam-tuning": { "enabled": true },
+      "aht-init": { "enabled": true }
     }
   }
 }
@@ -32,6 +33,7 @@ pip install -r auto-hparam-tuning/requirements.txt
 
 ## Features
 
+- A dedicated `aht-init` preflight sub-skill that checks whether the task already provides the minimum startup info
 - Automatically explore the project and understand the hparams
 - Extract tunable hparams from commands
 - Analyze the critical metrics from the tensorboard event file
@@ -110,6 +112,17 @@ python skills/auto-hparam-tuning/scripts/iter_next_hparams.py --project-root /pa
 tries the baseline first, then one-step neighbors of the current best run, then the nearest untried grid point.
 Instead of appending a SQLite row, it records the run into the active AHT session and updates `results.csv`,
 `metrics.json`, `resolved_config.json`, and `report.md`.
+
+## AHT Init Preflight
+
+Before the main tuning flow starts, the `aht-init` sub-skill should be invoked first. It checks whether the conversation/context already contains:
+
+- project path
+- conda environment name
+- reference launch script or command
+- optimization target
+
+If any field is missing, it generates one concise user-facing message that asks only for the missing items. If all fields are present, the main `auto-hparam-tuning` skill can continue into project understanding and session creation.
 
 ## Project Understanding
 
