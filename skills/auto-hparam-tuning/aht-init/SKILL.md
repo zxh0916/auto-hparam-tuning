@@ -1,6 +1,6 @@
 ---
 name: aht-init
-description: Collect and confirm the minimum required initialization info before starting any AHT run: project path, environment or conda env name, reference launch script/command, and optimization target. Always send a user-facing confirmation request first, even when the values seem inferable from context, and wait for the user to confirm or update them before continuing.
+description: Collect and confirm the minimum required initialization info before starting any AHT run: project path, environment or conda env name, reference training launch script/method, and optimization target. Always send a user-facing confirmation request first, even when the values seem inferable from context, and wait for the user to confirm or update them before continuing.
 ---
 
 # AHT Init
@@ -15,7 +15,7 @@ Collect and confirm these four items:
 
 1. **Project path**: the target project root path
 2. **Environment**: the runtime environment or conda environment name used to run training
-3. **Reference launch script/command**: the launch script or exact training command to tune
+3. **Reference training launch method**: the launch script or exact training invocation to tune
 4. **Optimization target**: the metric/objective to optimize, ideally with direction (`maximize`/`minimize`)
 
 ## Core Rules
@@ -47,7 +47,7 @@ Produce one concise English confirmation message to the user in this style:
 Before I start AHT, please confirm or update the initialization info:
 - project path: /path/to/project
 - environment / conda env: my-env
-- reference launch command: python train.py ...
+- reference training launch method: python train.py ...
 - optimization target: val/acc (maximize)
 
 Reply with “confirm” if this is correct, or send the corrected fields.
@@ -77,7 +77,7 @@ Then explicitly state that AHT can proceed to project/run understanding.
 - If the user gives `cd /path/to/proj && conda activate xxx && bash train.sh`, you can extract provisional values such as:
   - project path: `/path/to/proj`
   - environment / conda env: `xxx`
-  - reference command/script: `bash train.sh`
+  - reference training launch method/script: `bash train.sh`
 - If the user says `optimize val/acc`, infer:
   - optimization target: `val/acc`
   - goal: `maximize`

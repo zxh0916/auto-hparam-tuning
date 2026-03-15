@@ -19,7 +19,7 @@ This skill will automatically the hyperparameters managed by hydra config system
 ## Workflow
 
 0. Run the `aht-init` sub-skill first.
-   - Collect and normalize the minimum required inputs: project path, conda env, reference launch script/command, and optimization target.
+   - Collect and normalize the minimum required inputs: project path, conda env, reference training launch script/method, and optimization target.
    - Reuse anything already provided in the current conversation/context as provisional values.
    - Always send a user-facing confirmation message covering all four fields, even if they appear inferable.
    - Stop and wait for the user's confirmation or corrections.
@@ -48,7 +48,7 @@ This skill will automatically the hyperparameters managed by hydra config system
 
 ## 1. Understand the Project and Create the Session
 
-Before tuning the hparam of the project, you should always make sure that the `aht-init` step has already produced and the user has explicitly confirmed these four fields: project path, conda env name, reference launch command/script, and optimization target.
+Before tuning the hparam of the project, you should always make sure that the `aht-init` step has already produced and the user has explicitly confirmed these four fields: project path, conda env name, reference training launch method/script, and optimization target.
 
 Then make sure that you know the project enough by:
 
