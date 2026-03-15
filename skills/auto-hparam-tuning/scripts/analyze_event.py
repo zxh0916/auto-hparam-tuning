@@ -200,6 +200,24 @@ def main():
     import json
 
     parser = argparse.ArgumentParser(
+        description="Analyze TensorBoard event files.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # --- list-keys ---
+    p_list = subparsers.add_parser(
+        "list-keys",
+        help="List all scalar tags recorded in a TensorBoard event file.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_list.add_argument("event_path", metavar="EVENT_PATH",
+                        help="Path to the TensorBoard event file or the directory containing it.")
+
+    # --- summarize ---
+    p_summarize = subparsers.add_parser(
+        "summarize",
+        help="Print a JSON summary of one or more scalar curves.",
         description=(
             "Load a TensorBoard event file and print a JSON summary of one scalar curve.\n\n"
             "The summary includes basic statistics (initial/final/best/worst value and their\n"
@@ -212,11 +230,11 @@ def main():
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("event_path", metavar="EVENT_PATH",
-                        help="Path to the TensorBoard event file or the directory containing it.")
-    parser.add_argument("key", metavar="KEY", nargs="+",
-                        help="One or more scalar tags to summarize (e.g. 'val/loss' 'train/acc').")
-    parser.add_argument(
+    p_summarize.add_argument("event_path", metavar="EVENT_PATH",
+                             help="Path to the TensorBoard event file or the directory containing it.")
+    p_summarize.add_argument("key", metavar="KEY", nargs="+",
+                             help="One or more scalar tags to summarize (e.g. 'val/loss' 'train/acc').")
+    p_summarize.add_argument(
         "-m", "--mode",
         default=None,
         metavar="DIR",
@@ -227,7 +245,7 @@ def main():
             "context. (default: None — will raise if not provided)"
         ),
     )
-    parser.add_argument(
+    p_summarize.add_argument(
         "-s", "--smoothing",
         type=float,
         default=0.0,
@@ -239,7 +257,7 @@ def main():
             "smoothed curve. (default: 0)"
         ),
     )
-    parser.add_argument(
+    p_summarize.add_argument(
         "-ql", "--quantile-low",
         type=float,
         default=0.05,
@@ -251,7 +269,7 @@ def main():
             "outlier spikes. (default: 0.05)"
         ),
     )
-    parser.add_argument(
+    p_summarize.add_argument(
         "-qh", "--quantile-high",
         type=float,
         default=0.95,
@@ -261,8 +279,17 @@ def main():
             "Upper quantile for the robust range estimate. (default: 0.95)"
         ),
     )
+
     args = parser.parse_args()
 
+    if args.command == "list-keys":
+        df = event2dataframe(args.event_path)
+        keys = list(df.columns)
+        for key in keys:
+            print(key)
+        return
+
+    # summarize
     result = summarize_scalar_curve_from_event(
         event_path=args.event_path,
         key=args.key,
