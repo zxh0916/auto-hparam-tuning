@@ -60,8 +60,8 @@ class ProjectInspector:
                     label="project_walkthrough_summary_generation",
                     task=
                         f"Read and follow the instruction in {str(PROMPTS_DIR / "generate_project_md.md")} "
-                        f"and write your summary in {project_md_path}" + 
-                        f" in remote host {self.ssh_host}" if self.ssh_host is not None else "."
+                        f"and write your summary in {project_md_path} "
+                        (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
                 )
             )
         else:
@@ -78,8 +78,8 @@ class ProjectInspector:
                     label="hyperparameter_sturcture_summary_generation",
                     task=
                         f"Read and follow the instruction in {str(PROMPTS_DIR / "get_hparam_structure.md")} "
-                        f"and write your summary in {hparam_md_path}" + 
-                        f" in remote host {self.ssh_host}" if self.ssh_host is not None else "."
+                        f"and write your summary in {hparam_md_path} "
+                        (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
                 )
             )
         
@@ -90,6 +90,11 @@ class ProjectInspector:
                 f"and the hparam structure in {str(PROMPTS_DIR / "get_hparam_structure.md")} "
                 "then run `python scripts/project_understanding.py prepare-run-understanding <command>` "
                 "to understant the task to be tuned."
+            )
+        else:
+            next_steps.append(
+                "After spawned the subagent, DO NOTHING until the subagent returns. "
+                "Then, proceed with `python scripts/project_understanding.py prepare-run-understanding <command>`."
             )
         
         return {
@@ -103,7 +108,7 @@ class ProjectInspector:
             "next_steps": next_steps,
         }
 
-    def prepare_run_understanding(self, project_root: str, run_command: str, ssh_host: str | None = None) -> dict[str, Any]:
+    def prepare_run_understanding(self, run_command: str) -> dict[str, Any]:
         assert self.need_generate_project_md and self.need_generate_hparam_md, \
             "One of project summary and hparam structure is not found. Please run `python scripts/project_understanding.py inspect-project` first."
         available_context = [
@@ -143,12 +148,10 @@ def main() -> None:
     args = parse_args()
     pi = ProjectInspector(project_root=args.project_root, ssh_host=args.ssh_host)
     if args.command == "inspect-project":
-        result = pi.inspect_project(project_root=args.project_root, ssh_host=args.ssh_host)
+        result = pi.inspect_project()
     elif args.command == "prepare-run-understanding":
         result = pi.prepare_run_understanding(
-            project_root=args.project_root,
-            run_command=args.run_command,
-            ssh_host=args.ssh_host,
+            run_command=args.run_command
         )
     else:
         raise ProjectUnderstandingError(f"Unsupported command: {args.command}")

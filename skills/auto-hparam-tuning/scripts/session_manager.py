@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shlex
+import subprocess
 from datetime import datetime
 from io import StringIO
 from typing import Any, Literal
@@ -10,7 +12,15 @@ from typing import Any, Literal
 from omegaconf import OmegaConf
 import pandas as pd
 
-from utils import TargetSpec, Storage, LocalStorage, SSHStorage, default_storage as _default_storage, join as _join
+from utils import (
+    TargetSpec,
+    Storage,
+    LocalStorage,
+    SSHStorage,
+    default_storage as _default_storage,
+    join as _join,
+    get_sessions_spawn_command
+)
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
 RunStatus = Literal["created", "running", "finished", "failed", "killed", "inconclusive"]
@@ -384,6 +394,108 @@ def update_run_result(
     return {"results_csv": results_path, "row": normalized_row}
 
 
+def run_command(
+    session_dir: str,
+    run_id: int,
+    command: str,
+    conda_env: str | None = None,
+    cwd: str | None = None,
+    ssh_host: str | None = None,
+) -> dict[str, Any]:
+    """Execute *command* inside the run directory, streaming stdout/stderr to the
+    log files that were created by ``create_run``.
+
+    The run status in results.csv is updated to ``"running"`` before the
+    subprocess starts and to ``"finished"`` or ``"failed"`` once it exits.
+
+    Args:
+        session_dir: AHT session directory (absolute path on the target host).
+        run_id: Integer run ID returned by ``create_run``.
+        command: Shell command to execute.
+        conda_env: If given, wrap the command with ``conda run -n <env>``.
+        cwd: Working directory for the command on the target host.
+            Defaults to the session directory.
+        ssh_host: SSH host string.  ``None`` means local execution.
+
+    Returns:
+        Dict with ``run_id``, ``run_dir``, ``stdout_path``, ``stderr_path``,
+        ``returncode``, ``status``, ``start_time``, ``end_time``.
+    """
+    run_dir = _join(session_dir, "runs", str(run_id))
+    stdout_path = _join(run_dir, "stdout.log")
+    stderr_path = _join(run_dir, "stderr.log")
+    effective_cwd = cwd or session_dir
+
+    # Wrap with conda if requested.
+    if conda_env:
+        shell_cmd = "conda run -n " + shlex.quote(conda_env) + " bash -c " + shlex.quote(command)
+    else:
+        shell_cmd = command
+
+    start_time = _now_iso()
+    update_run_result(session_dir, run_id, status="running", start_time=start_time, ssh_host=ssh_host)
+
+    try:
+        if ssh_host is None:
+            # ── Local execution ──────────────────────────────────────────────
+            with open(stdout_path, "w", encoding="utf-8") as out_f, \
+                    open(stderr_path, "w", encoding="utf-8") as err_f:
+                proc = subprocess.run(
+                    shell_cmd,
+                    shell=True,
+                    cwd=effective_cwd,
+                    stdout=out_f,
+                    stderr=err_f,
+                )
+            returncode = proc.returncode
+        else:
+            # ── Remote execution via SSH ─────────────────────────────────────
+            # Build a single shell string executed by the remote bash:
+            #   cd <cwd> && <cmd> ><stdout_path> 2><stderr_path>
+            remote_cmd = (
+                "cd " + shlex.quote(effective_cwd)
+                + " && " + shell_cmd
+                + " >" + shlex.quote(stdout_path)
+                + " 2>" + shlex.quote(stderr_path)
+            )
+            proc = subprocess.run(
+                ["ssh", ssh_host, remote_cmd],
+                capture_output=True,
+                text=True,
+            )
+            returncode = proc.returncode
+    except Exception as exc:
+        end_time = _now_iso()
+        update_run_result(
+            session_dir, run_id,
+            status="failed",
+            end_time=end_time,
+            notes=str(exc),
+            ssh_host=ssh_host,
+        )
+        raise
+
+    end_time = _now_iso()
+    status: RunStatus = "finished" if returncode == 0 else "failed"
+    update_run_result(
+        session_dir, run_id,
+        status=status,
+        end_time=end_time,
+        ssh_host=ssh_host,
+    )
+
+    return {
+        "run_id": run_id,
+        "run_dir": run_dir,
+        "stdout_path": stdout_path,
+        "stderr_path": stderr_path,
+        "returncode": returncode,
+        "status": status,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+
+
 def append_report(session_dir: str, content: str, ssh_host: str | None = None) -> dict[str, Any]:
     storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
     report_path = _join(session_dir, "report.md")
@@ -463,6 +575,26 @@ def parse_args() -> argparse.Namespace:
     p_finalize.add_argument("--ended-at", default=None)
     p_finalize.add_argument("--notes", default=None)
 
+    p_exec = subparsers.add_parser(
+        "run-command",
+        help="Execute a shell command for a run, redirecting stdout/stderr to the run's log files.",
+    )
+    p_exec.add_argument("session_dir", help="AHT session directory.")
+    p_exec.add_argument("run_id", type=int, help="Run ID returned by create-run.")
+    p_exec.add_argument("command_str", metavar="command", help="Shell command to execute.")
+    p_exec.add_argument(
+        "--conda-env",
+        default=None,
+        metavar="ENV",
+        help="Conda environment name. When set, the command is wrapped with 'conda run -n ENV'.",
+    )
+    p_exec.add_argument(
+        "--cwd",
+        default=None,
+        metavar="DIR",
+        help="Working directory for the command on the target host. Defaults to the session directory.",
+    )
+
     return parser.parse_args()
 
 
@@ -517,6 +649,15 @@ def main() -> None:
             ssh_host=args.ssh_host,
             ended_at=args.ended_at,
             notes=args.notes,
+        )
+    elif args.command == "run-command":
+        result = run_command(
+            session_dir=args.session_dir,
+            run_id=args.run_id,
+            command=args.command_str,
+            conda_env=args.conda_env,
+            cwd=args.cwd,
+            ssh_host=args.ssh_host,
         )
     else:
         raise SessionManagerError(f"Unsupported command: {args.command}")
