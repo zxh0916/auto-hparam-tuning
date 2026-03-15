@@ -11,6 +11,7 @@ from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from omegaconf import OmegaConf
+import pandas as pd
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
 RunStatus = Literal["created", "running", "finished", "failed", "killed", "inconclusive"]
@@ -216,39 +217,6 @@ def _default_storage(target: TargetSpec) -> Storage:
     return SSHStorage(target.ssh_host) if target.is_remote else LocalStorage()
 
 
-def _load_results_rows(storage: Storage, results_path: str, columns: list[str]) -> list[dict[str, str]]:
-    if not storage.exists(results_path):
-        return []
-    text = storage.read_text(results_path)
-    if not text.strip():
-        return []
-
-    reader = csv.DictReader(StringIO(text))
-    rows: list[dict[str, str]] = []
-    for raw_row in reader:
-        rows.append({col: _stringify(raw_row.get(col, "")) for col in columns})
-    return rows
-
-
-def _write_results_rows(storage: Storage, results_path: str, rows: list[dict[str, str]], columns: list[str]) -> None:
-    normalized = [{col: _stringify(row.get(col, "")) for col in columns} for row in rows]
-    normalized.sort(
-        key=lambda row: _safe_int(row.get("run_id")) if _safe_int(row.get("run_id")) is not None else 10**18
-    )
-    buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=columns, lineterminator="\n")
-    writer.writeheader()
-    writer.writerows(normalized)
-    storage.write_text(results_path, buffer.getvalue())
-
-        key=lambda row: _safe_int(row.get("run_id")) if _safe_int(row.get("run_id")) is not None else 10**18
-    )
-    buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=columns, lineterminator="\n")
-    writer.writeheader()
-    writer.writerows(normalized)
-    storage.write_text(results_path, buffer.getvalue())
-
 def _load_results_dataframe(storage: Storage, results_path: str, columns: list[str]) -> pd.DataFrame:
     if storage.exists(results_path):
         text = storage.read_text(results_path)
@@ -284,34 +252,20 @@ def _write_results_dataframe(storage: Storage, results_path: str, df: pd.DataFra
 
 
 def _upsert_results_row(storage: Storage, results_path: str, columns: list[str], row: dict[str, Any]) -> dict[str, str]:
-    normalized_row = {
-        col: (None if col not in row or row.get(col) is None else _stringify(row.get(col)))
-        for col in columns
-    }
-    rows = _load_results_rows(storage, results_path, columns)
-    key = _stringify(row.get("run_id", ""))
-    existing = next((current for current in rows if _stringify(current.get("run_id")) == key), None)
-    if existing is None:
-        inserted = {col: ("" if normalized_row[col] is None else normalized_row[col]) for col in columns}
-        rows.append(inserted)
-        merged = inserted
+    normalized_row = {col: _stringify(row.get(col, "")) for col in columns}
+    df = _load_results_dataframe(storage, results_path, columns)
+    key = normalized_row["run_id"]
+    if df.empty:
+        df = pd.DataFrame([normalized_row], columns=columns)
     else:
-        merged = dict(existing)
-        for col in columns:
-            if normalized_row[col] is not None:
-                merged[col] = normalized_row[col]
-        for index, current in enumerate(rows):
-            if _stringify(current.get("run_id")) == key:
-                rows[index] = merged
-                break
-    _write_results_rows(storage, results_path, rows, columns)
-    if merged is not None:
-        return {col: _stringify(merged.get(col, "")) for col in columns}
-    if key:
-        for current in rows:
-            if _stringify(current.get("run_id")) == key:
-                return {col: _stringify(current.get(col, "")) for col in columns}
-    return {col: ("" if normalized_row[col] is None else normalized_row[col]) for col in columns}
+        mask = df["run_id"].astype(str) == key
+        if mask.any():
+            for col in columns:
+                df.loc[mask, col] = normalized_row[col]
+        else:
+            df = pd.concat([df, pd.DataFrame([normalized_row], columns=columns)], ignore_index=True)
+    _write_results_dataframe(storage, results_path, df, columns)
+    return normalized_row
 
 
 def _join(root: str, *parts: str) -> str:
@@ -348,7 +302,7 @@ def summarize_results(
     storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
     results_path = _join(session_dir, "results.csv")
     meta_path = _join(session_dir, "meta.yaml")
-    rows = _load_results_rows(storage, results_path, RESULTS_COLUMNS)
+    df = _load_results_dataframe(storage, results_path, RESULTS_COLUMNS)
 
     inferred_goal = goal
     meta_text = storage.read_text(meta_path) if storage.exists(meta_path) else ""
@@ -358,7 +312,7 @@ def summarize_results(
     if inferred_goal is None:
         inferred_goal = "maximize"
 
-    if not rows:
+    if df.empty:
         return {
             "session_dir": session_dir,
             "results_csv": results_path,
@@ -374,35 +328,28 @@ def summarize_results(
             "trend_hint": "no_runs",
         }
 
-    working = []
-    for row in rows:
-        enriched = dict(row)
-        enriched["run_id_int"] = _safe_int(row.get("run_id"))
-        enriched["primary_metric_float"] = _safe_float(row.get("primary_metric"))
-        enriched["best_step_int"] = _safe_int(row.get("best_step"))
-        working.append(enriched)
-    working.sort(key=lambda row: row["run_id_int"] if row["run_id_int"] is not None else 10**18)
+    working = df.copy()
+    working["run_id_int"] = working["run_id"].map(_safe_int)
+    working["primary_metric_float"] = working["primary_metric"].map(_safe_float)
+    working["best_step_int"] = working["best_step"].map(_safe_int)
+    working = working.sort_values(
+        by="run_id_int",
+        key=lambda s: s.map(lambda x: x if x is not None else 10**18),
+    ).reset_index(drop=True)
 
-    run_count = len(working)
-    finished_rows = [row for row in working if row["status"] == "finished"]
-    failed_rows = [row for row in working if row["status"] == "failed"]
-    latest_row = working[-1]
+    run_count = int(len(working))
+    finished_df = working[working["status"] == "finished"].copy()
+    failed_df = working[working["status"] == "failed"].copy()
+    latest_row = working.iloc[-1]
 
-    metric_rows = [row for row in working if row["primary_metric_float"] is not None]
-    best_row: dict[str, Any] | None = None
+    metric_df = working[working["primary_metric_float"].notna()].copy()
+    best_row = None
     top_runs: list[dict[str, Any]] = []
-    if metric_rows:
+    if not metric_df.empty:
         ascending = str(inferred_goal).lower() in {"min", "minimize", "lower", "low"}
-        metric_rows = sorted(
-            metric_rows,
-            key=lambda row: (
-                row["primary_metric_float"],
-                row["run_id_int"] if row["run_id_int"] is not None else 10**18,
-            ),
-            reverse=not ascending,
-        )
-        best_row = metric_rows[0]
-        for row in metric_rows[: max(top_k, 0)]:
+        metric_df = metric_df.sort_values(by=["primary_metric_float", "run_id_int"], ascending=[ascending, True])
+        best_row = metric_df.iloc[0]
+        for _, row in metric_df.head(max(top_k, 0)).iterrows():
             top_runs.append({
                 "run_id": row["run_id_int"],
                 "status": row["status"],
@@ -413,7 +360,7 @@ def summarize_results(
             })
 
     recent_runs: list[dict[str, Any]] = []
-    for row in working[-max(recent_k, 0) :]:
+    for _, row in working.tail(max(recent_k, 0)).iterrows():
         recent_runs.append({
             "run_id": row["run_id_int"],
             "status": row["status"],
@@ -424,18 +371,9 @@ def summarize_results(
         })
 
     trend_hint = "insufficient_metric_history"
-    # Use the most recent metric-bearing runs in run-id order to compute trend,
-    # rather than the metric-sorted `metric_rows`.
-    recent_metric_rows: list[dict[str, Any]] = []
-    for row in reversed(working):
-        if row["primary_metric_float"] is None:
-            continue
-        recent_metric_rows.append(row)
-        if len(recent_metric_rows) >= 3:
-            break
-    recent_metric_rows = list(reversed(recent_metric_rows))
-    if len(recent_metric_rows) >= 2:
-        values = [row["primary_metric_float"] for row in recent_metric_rows]
+    recent_metric_df = working[working["primary_metric_float"].notna()].tail(3).copy()
+    if len(recent_metric_df) >= 2:
+        values = recent_metric_df["primary_metric_float"].tolist()
         deltas = [b - a for a, b in zip(values[:-1], values[1:])]
         if str(inferred_goal).lower() in {"min", "minimize", "lower", "low"}:
             deltas = [-x for x in deltas]
@@ -455,8 +393,8 @@ def summarize_results(
         "results_csv": results_path,
         "goal": inferred_goal,
         "run_count": run_count,
-        "finished_run_count": len(finished_rows),
-        "failed_run_count": len(failed_rows),
+        "finished_run_count": int(len(finished_df)),
+        "failed_run_count": int(len(failed_df)),
         "latest_run_id": _safe_int(latest_row["run_id"]),
         "latest_status": latest_row["status"],
         "latest_primary_metric": _safe_float(latest_row["primary_metric"]),
@@ -615,53 +553,6 @@ def update_run_result(
     }
     normalized_row = _upsert_results_row(storage, results_path, RESULTS_COLUMNS, row)
     return {"results_csv": results_path, "row": normalized_row}
-
-
-def write_run_payloads(
-    session_dir: str,
-    run_id: int,
-    *,
-    run_name: str | None = None,
-    hydra_config: Any = None,
-    metrics: Any = None,
-    summary_content: str | None = None,
-    ssh_host: str | None = None,
-) -> dict[str, Any]:
-    storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
-    config_relpath = f"runs/{run_id}/resolved_config.json"
-    metrics_relpath = f"runs/{run_id}/metrics.json"
-    summary_relpath = f"runs/{run_id}/summary.md"
-
-    if hydra_config is not None:
-        storage.write_text(
-            _join(session_dir, config_relpath),
-            json.dumps(hydra_config, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        )
-    if metrics is not None:
-        storage.write_text(
-            _join(session_dir, metrics_relpath),
-            json.dumps(metrics, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        )
-    if summary_content is not None:
-        text = summary_content if summary_content.endswith("\n") else summary_content + "\n"
-        storage.write_text(_join(session_dir, summary_relpath), text)
-
-    row = update_run_result(
-        session_dir=session_dir,
-        run_id=run_id,
-        run_name=run_name,
-        config_path=config_relpath,
-        metrics_path=metrics_relpath,
-        summary_path=summary_relpath,
-        ssh_host=ssh_host,
-    )["row"]
-    return {
-        "run_dir": _join(session_dir, "runs", str(run_id)),
-        "config_path": _join(session_dir, config_relpath),
-        "metrics_path": _join(session_dir, metrics_relpath),
-        "summary_path": _join(session_dir, summary_relpath),
-        "row": row,
-    }
 
 
 def append_report(session_dir: str, content: str, ssh_host: str | None = None) -> dict[str, Any]:

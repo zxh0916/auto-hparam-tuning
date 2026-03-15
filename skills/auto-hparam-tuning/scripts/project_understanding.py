@@ -175,7 +175,8 @@ def prepare_run_understanding(project_root: str, run_command: str, ssh_host: str
             "Ensure project-level docs and HPARAM.md exist or are generated first.",
             "Read the available context files listed above.",
             "Run prompts/understand_run_command.md with the given project root and run command.",
-            "Save the resulting note into the active AHT session as a session-specific understanding artifact.",
+            "Save the resulting note into report.md after session creation using",
+            "`python scripts/session_manager.py --ssh-host user@remotehost <path to project root> append-report <your understanding>`.",
         ],
     }
 

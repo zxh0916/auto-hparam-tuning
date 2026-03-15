@@ -33,23 +33,82 @@ This skill will automatically the hyperparameters managed by hydra config system
 
     6. Formalize the suggestion into a `override.yaml`, upload into the remote directory that contains the main config file, then back to 1. to launch another run.
 
-## Experiment History
 
-Use the CSV-backed session store under `aht/yyyy-mm-dd/hh-mm-ss/` as the canonical experiment backend.
-Do not create or depend on SQLite state. The canonical structured index is `results.csv`; detailed per-run payloads
-live beside it under `runs/<id>/resolved_config.json`, `runs/<id>/metrics.json`, and `runs/<id>/summary.md`.
+## 1. Understand the Project and Create the Session
 
-- Initialize the backend layout if needed:
-  `python3 skills/auto-hparam-tuning/scripts/init_experiment_history_db.py --project-root /path/to/project`
-- Insert one run after resolving the Hydra config and collecting metrics:
-  `python3 skills/auto-hparam-tuning/scripts/insert_experiment_history.py --project-root /path/to/project --run-name baseline --config-file resolved_config.yaml --metrics-json '{"val/loss":0.42,"val/acc":0.91}' --primary-metric-name val/loss`
-- Query recent runs for agent consumption:
-  `python3 skills/auto-hparam-tuning/scripts/query_experiment_history.py --project-root /path/to/project --limit 20 --format json`
+Before tuning the hparam of the project, you should always make sure that you know the project enough by:
 
-Behavior details:
-- History is aggregated from all session CSVs under the target project unless `--session-dir` is used.
-- `results.csv` stores the stable run index and artifact paths; per-run JSON/YAML payloads are loaded on demand.
-- If no session exists yet, compatibility scripts auto-create one instead of requiring a separate database bootstrap step.
+1. Understand the whole project:
+
+    1. `python scripts/project_understanding.py inspect-project <path to project root>` for local project or 
+
+    2. `python scripts/project_understanding.py inspect-project --ssh-host user@remotehost <path to project root>` for project on remote machine.
+
+2. Understand the task to be tuned: `python scripts/project_understanding.py prepare-run-understanding <path to project root> <command to be tuned>`.
+
+3. Create the Session: `python scripts/session_manager.py create-session <path to project root> --ssh-host user@remotehost --base-command <command> --primary-metric <primary metric> --goal <goal>`.
+
+4. Write the Session Understanding into the report: `python scripts/session_manager.py --ssh-host user@remotehost <path to project root> append-report <your understanding>`.
+
+
+## Pipeline Algorithm
+
+resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
+
+### 1. UNDERSTAND PROJECT:
+    a. python {SKILL_DIR}/scripts/project_understanding.py[ --ssh-host user@remotehost] inspect-project {PROJECT_DIR}
+        → tells you which docs exist, what needs to be generated, and which prompts to use
+    b. Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing in `aht/`
+        → creates `{PROJECT_DIR}/PROJECT.md` (general project onboarding guide)
+    c. Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing in `aht/`
+        → creates `{PROJECT_DIR}/HPARAM.md` (Hydra config and hparam guide)
+
+### 2. UNDERSTAND RUN COMMAND:
+    a. python {SKILL_DIR}/scripts/project_understanding.py[ --ssh-host user@remotehost] prepare-run-understanding
+        {PROJECT_DIR} "{BASE_COMMAND}"
+        → returns required_prompt and available_context_files
+    b. Follow {SKILL_DIR}/prompts/understand_run_command.md for the given command
+        → produces session-specific understanding: active config chain, relevant files,
+          output paths, metric candidates, tuning knobs
+
+### 3. CREATE SESSION:
+    a. python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
+        create-session {PROJECT_DIR} \
+        --base-command "{BASE_COMMAND}" \
+        --primary-metric {METRIC} \
+        --goal {GOAL}
+        → creates {PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/
+    b. python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] append-report
+        {PROJECT_DIR} "your understanding to the task"
+        → appends in {PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/report.md
+
+### 4. MICRO-BASELINE RUN:
+    a. CREATE RUN:    session_manager.py create-run {SESSION_DIR}
+    b. fill override.yaml returned by the Session Manager with empty content and copy the file content to override.yaml that lies within the same directory as the primary config file.
+    c. Launch BASE_COMMAND within the conda environment specified by the user.
+    d. Estimate the duration of the test run.
+    e. (remote only) Once the test run complete, copy back the event file and the hydra config back to the /tmp file from the remote.
+    d. Analyze event file with {SKILL_DIR}/scripts/analyze_event.py
+      → confirm metric keys, establish micro-baseline performance
+    PLAN STRATEGY:
+      Follow {SKILL_DIR}/prompts/plan_tuning_strategy.md to create `{SESSION_DIR}/strategy.md`
+
+### 5. TUNING LOOP (up to BUDGET iterations):
+    a. CREATE RUN:    session_manager.py create-run {SESSION_DIR} (repeat for parallel runs)
+    b. TUNE:          Review strategy.md. Decide hparam changes, write override.yaml in run dir
+    c. OVERRIDE:      Overwrite the content of the override.yaml that lies within the same directory as the primary config file with the content of run/<runId>/override.yaml
+    d. EXECUTE:       Launch training with overrides with specified conda environment.
+    e. COPYBACK:      (remote only) Once the test run complete, copy back the event file and the hydra config back to the /tmp file from the remote.
+    f. ANALYZE:       Analyze_event.py on event file → curve statistics
+    g. RECORD:        Session_manager.py update-run with metrics and status
+    h. LOG:           Session_manager.py append-report with analysis and takeaway
+    i. CHECK:         Session_manager.py summarize-results → trend_hint
+    j. TERMINATE?:    Stop if trend_hint is flat/degrading × 3, budget exhausted, or objective met
+
+### 6. FINALIZE:
+    session_manager.py finalize-session {SESSION_DIR} completed
+    → present final report and best config to user
+
 
 ## Capability: experiment-history visualization/reporting
 
@@ -67,35 +126,3 @@ Behavior details:
 - If `--metric` is omitted, it auto-selects a numeric metric from the current history contents, preferring common names such as `val/loss` when present.
 - Metric direction defaults to `min` for loss/error-like names and `max` otherwise; override with `--goal min|max` if needed.
 - Reports stay practical: project summary, top runs table, recent runs table, compact metric trend, and config diffs among top runs.
-
-## Capability: iter_next_hparams
-
-Use `iter_next_hparams` for one practical tuning iteration that stays fully script-backed and CSV-native:
-
-1. Read the aggregated session history if it already exists.
-2. Pick the next proposal from a declared search space.
-3. Execute one local training command.
-4. Record the new config and metrics into the active AHT session.
-
-Primary command:
-
-`python3 skills/auto-hparam-tuning/scripts/iter_next_hparams.py --project-root /path/to/project --base-config-file resolved_config.yaml --search-space-file search_space.yaml --train-command-template 'python train.py --config {config_path} --metrics-out {metrics_path}'`
-
-Minimal search-space file shape:
-
-```yaml
-metric:
-  name: val/loss
-  goal: min
-run_name_prefix: tune
-parameters:
-  optimizer.lr:
-    values: [0.0001, 0.0003, 0.001]
-  trainer.batch_size:
-    values: [32, 64, 128]
-```
-
-Behavior details:
-- No history or no matching rows: propose the baseline config values projected into the discrete search space.
-- Existing rows: score the best prior run by `metric.name`, explore one-step neighbors first, then fall back to the nearest untried grid point.
-- The executed run is appended to the active session and updates `results.csv`, `resolved_config.json`, `metrics.json`, and `report.md`.

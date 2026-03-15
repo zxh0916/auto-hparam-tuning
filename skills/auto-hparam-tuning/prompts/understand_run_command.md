@@ -66,17 +66,17 @@ Required tasks:
 - If sweeps are supported, show the canonical sweep form for this command.
 
 Output format:
-Write a concise structured note with these headings:
+Write a concise structured note into the report after sessions creation with these headings:
 
-# Session Run Understanding
-## Command Summary
-## Runtime Path
-## Active Config Chain
-## Relevant Files
-## Outputs and TensorBoard
-## Primary Metric Recommendation
-## Tuning Knobs for This Session
-## Safe First Actions
+## Session Run Understanding
+### Command Summary
+### Runtime Path
+### Active Config Chain
+### Relevant Files
+### Outputs and TensorBoard
+### Primary Metric Recommendation
+### Tuning Knobs for This Session
+### Safe First Actions
 
 Style requirements:
 - Be specific and repository-grounded.
