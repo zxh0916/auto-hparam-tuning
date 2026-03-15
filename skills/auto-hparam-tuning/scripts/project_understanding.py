@@ -58,10 +58,11 @@ class ProjectInspector:
                 "Spawn a subagent to walk through the project with following command: " + 
                 get_sessions_spawn_command(
                     label="project_walkthrough_summary_generation",
-                    task=
-                        f"Read and follow the instruction in {str(PROMPTS_DIR / "generate_project_md.md")} "
-                        f"and write your summary in {project_md_path} "
+                    task=(
+                        f"Read and follow the instruction in {str(PROMPTS_DIR / "generate_project_md.md")} "+
+                        f"and write your summary in {project_md_path} "+
                         (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
+                    )
                 )
             )
         else:
@@ -76,10 +77,11 @@ class ProjectInspector:
                 "Spawn a subagent to explore the hyperparameter structure of the project with following command: " + 
                 get_sessions_spawn_command(
                     label="hyperparameter_sturcture_summary_generation",
-                    task=
-                        f"Read and follow the instruction in {str(PROMPTS_DIR / "get_hparam_structure.md")} "
-                        f"and write your summary in {hparam_md_path} "
+                    task=(
+                        f"Read and follow the instruction in {str(PROMPTS_DIR / "get_hparam_structure.md")} "+
+                        f"and write your summary in {hparam_md_path} "+
                         (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
+                    )
                 )
             )
         
