@@ -34,23 +34,6 @@ This skill will automatically the hyperparameters managed by hydra config system
     6. Formalize the suggestion into a `override.yaml`, upload into the remote directory that contains the main config file, then back to 1. to launch another run.
 
 
-## 1. Understand the Project and Create the Session
-
-Before tuning the hparam of the project, you should always make sure that you know the project enough by:
-
-1. Understand the whole project:
-
-    1. `python scripts/project_understanding.py inspect-project <path to project root>` for local project or 
-
-    2. `python scripts/project_understanding.py inspect-project --ssh-host user@remotehost <path to project root>` for project on remote machine.
-
-2. Understand the task to be tuned: `python scripts/project_understanding.py prepare-run-understanding <path to project root> <command to be tuned>`.
-
-3. Create the Session: `python scripts/session_manager.py create-session <path to project root> --ssh-host user@remotehost --base-command <command> --primary-metric <primary metric> --goal <goal>`.
-
-4. Write the Session Understanding into the report: `python scripts/session_manager.py --ssh-host user@remotehost <path to project root> append-report <your understanding>`.
-
-
 ## Pipeline Algorithm
 
 resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
