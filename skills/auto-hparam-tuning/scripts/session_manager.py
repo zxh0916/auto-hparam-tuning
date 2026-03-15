@@ -10,6 +10,7 @@ from io import StringIO
 from pathlib import PurePosixPath
 from typing import Any, Literal
 
+from omegaconf import OmegaConf
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
 RunStatus = Literal["created", "running", "finished", "failed", "killed", "inconclusive"]
