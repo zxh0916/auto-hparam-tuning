@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title}</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f3efe6;
+      --panel: #fffaf2;
+      --ink: #1f2a2a;
+      --muted: #6a726f;
+      --accent: #9f3b2e;
+      --line: #d9cbb1;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(159, 59, 46, 0.08), transparent 32%),
+        linear-gradient(180deg, #f7f2e8 0%, var(--bg) 100%);
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 32px 20px 56px;
+    }
+
+    h1, h2, h3 {
+      margin: 0 0 12px;
+      line-height: 1.1;
+    }
+
+    p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .hero {
+      padding: 28px;
+      border: 1px solid var(--line);
+      background: rgba(255, 250, 242, 0.92);
+      border-radius: 20px;
+      box-shadow: 0 18px 50px rgba(82, 57, 30, 0.08);
+    }
+
+    .hero p + p {
+      margin-top: 8px;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin-top: 20px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 12px 30px rgba(82, 57, 30, 0.05);
+    }
+
+    .value {
+      margin-top: 6px;
+      font-size: 1.6rem;
+      color: var(--accent);
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.95rem;
+    }
+
+    th, td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+      font-size: 0.78rem;
+    }
+
+    .trend-chart {
+      width: 100%;
+      height: auto;
+      color: var(--accent);
+      margin-top: 12px;
+    }
+
+    .stack {
+      display: grid;
+      gap: 18px;
+      margin-top: 18px;
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 18px;
+    }
+
+    li + li {
+      margin-top: 8px;
+    }
+
+    @media (max-width: 860px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>${title}</h1>
+      <p>${history_root}</p>
+      <div class="metrics">
+        <article class="card">
+          <h2>Total Runs</h2>
+          <div class="value">${total_runs}</div>
+        </article>
+        <article class="card">
+          <h2>Metric</h2>
+          <div class="value">${metric_name}</div>
+          <p>Goal: ${metric_goal}</p>
+        </article>
+        <article class="card">
+          <h2>Coverage</h2>
+          <div class="value">${metric_coverage}</div>
+        </article>
+        <article class="card">
+          <h2>Best Run</h2>
+          <div class="value">${best_value}</div>
+          <p>${best_run}</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="layout">
+      <article class="card">
+        <h2>Metric Trend</h2>
+        <p>Chronological order across CSV-indexed runs that contain the selected metric.</p>
+        ${trend_svg}
+      </article>
+      <article class="card">
+        <h2>Recent Runs</h2>
+        ${recent_runs_table}
+      </article>
+    </section>
+
+    <section class="stack">
+      <article class="card">
+        <h2>Top Runs</h2>
+        ${top_runs_table}
+      </article>
+      ${diff_sections}
+    </section>
+  </main>
+</body>
+</html>

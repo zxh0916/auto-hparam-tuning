@@ -90,6 +90,29 @@ python skills/auto-hparam-tuning/scripts/session_manager.py summarize-results <s
 python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server summarize-results <remote_session_dir>
 ```
 
+## CSV Experiment History
+
+The experiment backend now uses the session layout under `<project_root>/aht/` as the source of truth.
+Each session keeps a canonical `results.csv` index plus per-run payloads such as `resolved_config.json`,
+`metrics.json`, `summary.md`, and the session-level `report.md`.
+
+Compatibility helpers that preserve the old experiment-history workflow now read and write this CSV-backed store:
+
+```bash
+python skills/auto-hparam-tuning/scripts/init_experiment_history_db.py --project-root /path/to/project
+python skills/auto-hparam-tuning/scripts/query_experiment_history.py --project-root /path/to/project --limit 20 --format json
+python skills/auto-hparam-tuning/scripts/report_experiment_history.py --project-root /path/to/project summary
+python skills/auto-hparam-tuning/scripts/report_experiment_history.py --project-root /path/to/project report --output-markdown /tmp/report.md --output-html /tmp/report.html
+python skills/auto-hparam-tuning/scripts/iter_next_hparams.py --project-root /path/to/project --base-config-file resolved_config.yaml --search-space-file search_space.yaml --train-command-template 'python train.py --config {config_path} --metrics-out {metrics_path}'
+```
+
+`iter_next_hparams.py` keeps the `exp-launch` planning behavior: it inspects prior runs across the project,
+tries the baseline first, then one-step neighbors of the current best run, then the nearest untried grid point.
+Instead of appending a SQLite row, it records the run into the active AHT session and updates `results.csv`,
+`metrics.json`, `resolved_config.json`, and `report.md`.
+
+## Project Understanding
+
 A lightweight project-understanding flow helper is also available:
 
 ```bash
