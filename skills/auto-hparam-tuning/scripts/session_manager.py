@@ -240,6 +240,14 @@ def _write_results_rows(storage: Storage, results_path: str, rows: list[dict[str
     writer.writerows(normalized)
     storage.write_text(results_path, buffer.getvalue())
 
+        key=lambda row: _safe_int(row.get("run_id")) if _safe_int(row.get("run_id")) is not None else 10**18
+    )
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(normalized)
+    storage.write_text(results_path, buffer.getvalue())
+
 def _load_results_dataframe(storage: Storage, results_path: str, columns: list[str]) -> pd.DataFrame:
     if storage.exists(results_path):
         text = storage.read_text(results_path)
