@@ -77,7 +77,7 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
       Follow {SKILL_DIR}/prompts/plan_tuning_strategy.md to create `{SESSION_DIR}/strategy.md`
 
 ### 5. TUNING LOOP (up to BUDGET iterations):
-    a. CREATE RUN:    session_manager.py create-run {SESSION_DIR} (repeat for parallel runs)
+    a. CREATE RUN:    session_manager.py create-run {SESSION_DIR}
     b. TUNE:          Review strategy.md. Decide hparam changes, write override.yaml in run dir
     c. OVERRIDE:      Overwrite the content of the override.yaml that lies within the same directory as the primary config file with the content of run/<runId>/override.yaml
     d. EXECUTE:       Start the run with `python scripts/session_manager.py[ --ssh-host "remotehost"] run-command /path/to/the/session --run-id <run_id> --command-str "the python command"[ --conda-env env]` and query the status with `python scripts/session_manager.py[ --ssh-host "remotehost"] run-command /path/to/the/session --run-id <run_id>`

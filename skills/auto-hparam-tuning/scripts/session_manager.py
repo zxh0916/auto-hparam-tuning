@@ -244,6 +244,11 @@ def summarize_results(
         "top_runs": top_runs,
         "recent_runs": recent_runs,
         "trend_hint": trend_hint,
+        "next_step":
+            "The AHT loop just iterated once. Start another run with `python scripts/session_manager.py " + 
+            f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
+            f"create-run {session_dir}` " +
+            "or just stop at here if you believe the tuning process is completed."
     }
 
 
@@ -269,6 +274,7 @@ def create_session(
 
     storage.mkdir(runs_dir)
     storage.write_text(_join(session_dir, "results.csv"), ",".join(RESULTS_COLUMNS) + "\n")
+    storage.write_text(_join(session_dir, "strategy.md"), "")
     storage.write_text(
         _join(session_dir, "report.md"),
         "# AHT Report\n\n## Session Summary\n"
@@ -303,6 +309,10 @@ def create_session(
         "meta_yaml": _join(session_dir, "meta.yaml"),
         "storage": meta["storage"],
         "ssh_host": ssh_host,
+        "next_step":
+            "Run `python scripts/session_manager.py " +
+            f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
+            "append-report /path/to/project \"your understandings to the task\"` to write down your understandings to the task. "
     }
 
 
@@ -354,6 +364,65 @@ def create_run(session_dir: str, ssh_host: str | None = None, notes: str | None 
         "metrics_path": _join(run_dir, "metrics.json"),
         "summary_path": _join(run_dir, "summary.md"),
         "copied_dir": copied_dir,
+        "next_step":
+            f"Read and follow the instructions in {Path(__file__).parent.parent.joinpath("prompts", "plan_tuning_strategy.md")}." +
+            "Then, specify a hparam combination with `python scripts/session_manager.py[ --ssh-host \"remotehost\"] write-override " +
+            f"{session_dir} --run-id {next_id} " +
+            "--override param0=value0 moduleA.param1=value1 moduleB.submodule0=value2 moduleC/submodule1=subconfig0"
+    }
+
+
+def write_override(
+    session_dir: str,
+    run_id: int,
+    overrides: list[str] | None = None,
+    yaml_content: str | None = None,
+    ssh_host: str | None = None,
+) -> dict[str, Any]:
+    """Write Hydra overrides to ``<run_dir>/override.yaml``.
+
+    Accepts either a list of dotted-path ``key=value`` strings (Hydra CLI style)
+    or a raw YAML string.  Exactly one of *overrides* or *yaml_content* must be
+    provided.
+
+    Args:
+        session_dir: AHT session directory.
+        run_id: Integer run ID returned by ``create_run``.
+        overrides: Hydra-style override list, e.g.
+            ``["model.hidden_size=256", "optimizer.lr=0.001"]``.
+            Parsed with ``OmegaConf.from_dotlist`` and serialized to YAML.
+        yaml_content: Raw YAML string written verbatim to override.yaml.
+        ssh_host: SSH host string. ``None`` means local.
+
+    Returns:
+        Dict with ``override_path`` and the written ``yaml_content``.
+    """
+    if (overrides is None) == (yaml_content is None):
+        raise SessionManagerError("Exactly one of 'overrides' or 'yaml_content' must be provided.")
+
+    if overrides is not None:
+        cfg = OmegaConf.from_dotlist(overrides)
+        text = OmegaConf.to_yaml(cfg)
+    else:
+        text = yaml_content if yaml_content.endswith("\n") else yaml_content + "\n"
+
+    run_dir = _join(session_dir, "runs", str(run_id))
+    override_path = _join(run_dir, "override.yaml")
+    storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
+    storage.write_text(override_path, text)
+
+    return {
+        "run_id": run_id,
+        "override_path": override_path,
+        "yaml_content": text,
+        "next_step": 
+            # TODO: use `cp` to copy the file
+            "Copy the content of the override.yaml into the config file with the same name " +
+            "that is placed inside the same directory as the primary config file. " +
+            "Then start a run with `python scripts/session_manager.py " +
+            f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
+            f"run-command {session_dir} --run-id {run_id} " +
+            "--conda-env \"specified_conda_env\" --command-str \"specified_command\""
     }
 
 
@@ -392,7 +461,14 @@ def update_run_result(
         "notes": notes,
     }
     normalized_row = _upsert_results_row(storage, results_path, RESULTS_COLUMNS, row)
-    return {"results_csv": results_path, "row": normalized_row}
+    return {
+        "results_csv": results_path,
+        "row": normalized_row,
+        "next_step": 
+            "Run `python scripts/session_manager.py " +
+            f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
+            "append-report /path/to/project \"summary of this run\"`."
+    }
 
 
 def _tmux_session_name(session_dir: str, run_id: int) -> str:
@@ -490,7 +566,7 @@ def run_command(
             "next_step":
                 "Query the run with " + 
                 "`python scripts/session_manager.py " +
-                f"--ssh-host \"{ssh_host}\" " +
+                f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
                 f"poll-run {session_dir} --run-id {run_id}`"
         }
 
@@ -522,6 +598,15 @@ def run_command(
     end_time = _now_iso()
     status: RunStatus = "finished" if returncode == 0 else "failed"
     update_run_result(session_dir, run_id, status=status, end_time=end_time, ssh_host=ssh_host)
+    
+    next_step = []
+    if status == "finished":
+        if ssh_host is not None:
+            next_step.append("Copy the event file and the full config file back to local disk.")
+        next_step.append("Run `python scripts/analyze_event.py list-keys /path/to/the/local/event/file` to list scalar keys.")
+        next_step.append("Then run `python scripts/analyze_event.py summarize /path/to/the/local/event/file key1 key2 keyn` to analyze the selected scalar events.")
+    else:
+        next_step.append("Run failed. Now try to figure out what's wrong according to the stdout.")
 
     return {
         "run_id": run_id,
@@ -533,6 +618,7 @@ def run_command(
         "start_time": start_time,
         "end_time": end_time,
         "cwd": effective_cwd,
+        "next_step": next_step
     }
 
 
@@ -642,7 +728,23 @@ def append_report(session_dir: str, content: str, ssh_host: str | None = None) -
     report_path = _join(session_dir, "report.md")
     text = content if content.endswith("\n") else content + "\n"
     storage.append_text(report_path, text)
-    return {"report_md": report_path, "appended_chars": len(text)}
+    if len(storage.list_dir_names(_join(session_dir, "runs"))) == 0:
+        next_step = [
+            "Now the session is initialized. Start the test run with `python scripts/session_manager.py " + 
+            f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
+            f"create-run {session_dir}`"
+        ]
+    else:
+        next_step = [
+            "Run `python scripts/session_manager.py " +
+            f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
+            f"summarize-results {session_dir}` to analyze the finished runs. "
+        ]
+    return {
+        "report_md": report_path,
+        "appended_chars": len(text),
+        "next_step": next_step
+    }
 
 
 def finalize_session(
@@ -742,6 +844,31 @@ def parse_args() -> argparse.Namespace:
         help="Disable tmux and run synchronously (blocks until the command finishes).",
     )
 
+    p_override = subparsers.add_parser(
+        "write-override",
+        help="Write Hydra overrides to the override.yaml of a run.",
+    )
+    p_override.add_argument("session_dir")
+    p_override.add_argument("--run-id", type=int, required=True, help="Run ID returned by create-run.")
+    group = p_override.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--override",
+        dest="overrides",
+        action="append",
+        metavar="KEY=VALUE",
+        help=(
+            "Hydra-style dotted-path override, e.g. --override model.hidden_size=256. "
+            "Repeat to set multiple overrides. Converted to YAML via OmegaConf."
+        ),
+    )
+    group.add_argument(
+        "--yaml",
+        dest="yaml_content",
+        default=None,
+        metavar="YAML",
+        help="Raw YAML string written verbatim to override.yaml.",
+    )
+
     p_poll = subparsers.add_parser(
         "poll-run",
         help="Check if a tmux-launched run has finished and update results.csv.",
@@ -810,6 +937,14 @@ def main() -> None:
             ssh_host=args.ssh_host,
             ended_at=args.ended_at,
             notes=args.notes,
+        )
+    elif args.command == "write-override":
+        result = write_override(
+            session_dir=args.session_dir,
+            run_id=args.run_id,
+            overrides=args.overrides,
+            yaml_content=args.yaml_content,
+            ssh_host=args.ssh_host,
         )
     elif args.command == "run-command":
         result = run_command(

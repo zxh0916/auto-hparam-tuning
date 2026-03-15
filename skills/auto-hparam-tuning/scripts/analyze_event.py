@@ -301,6 +301,9 @@ def main():
     # Single key → bare object for backward compatibility; multiple keys or "all" → array.
     single = len(args.key) == 1 and args.key[0] != "all"
     print(json.dumps(result[0] if single else result, indent=2))
+    print(
+        "next_step: Run `python scripts/session_manager.py update-run` to update the report and the records."
+    )
 
 
 def summarize_scalar_curve_from_event(

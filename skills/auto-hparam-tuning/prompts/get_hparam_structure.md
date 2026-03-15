@@ -44,6 +44,7 @@ Required sections:
 
 When Hydra is present, spend less space on code style and prioritize documenting the configuration and hyperparameter system over generic project repository structure:
 - config roots
+- path to the primary config file
 - defaults composition
 - experiment aliases
 - launch/sweep plugins
