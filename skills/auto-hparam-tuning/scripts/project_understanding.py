@@ -1,131 +1,24 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import shlex
-import subprocess
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any
 
+from utils import TargetSpec, Storage, LocalStorage, SSHStorage, default_storage, join as _join
 
-REMOTE_HELPER = r'''
-import json
-import sys
-from pathlib import Path
-
-payload = json.load(sys.stdin)
-action = payload["action"]
-
-if action == "exists":
-    path = Path(payload["path"])
-    sys.stdout.write(json.dumps({"exists": path.exists()}, ensure_ascii=False))
-elif action == "glob":
-    root = Path(payload["root"])
-    patterns = payload["patterns"]
-    matches = []
-    for pattern in patterns:
-        matches.extend(str(p) for p in root.glob(pattern))
-    matches = sorted(dict.fromkeys(matches))
-    sys.stdout.write(json.dumps({"matches": matches}, ensure_ascii=False))
-elif action == "read_text":
-    path = Path(payload["path"])
-    sys.stdout.write(json.dumps({"text": path.read_text(encoding="utf-8")}, ensure_ascii=False))
-else:
-    raise ValueError(f"Unsupported action: {action}")
-'''
 
 
 class ProjectUnderstandingError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
-class StorageTarget:
-    project_root: str
-    ssh_host: str | None = None
-
-    @property
-    def is_remote(self) -> bool:
-        return self.ssh_host is not None
-
-
-class Storage:
-    def exists(self, path: str) -> bool:
-        raise NotImplementedError
-
-    def glob(self, root: str, patterns: list[str]) -> list[str]:
-        raise NotImplementedError
-
-    def read_text(self, path: str) -> str:
-        raise NotImplementedError
-
-
-class LocalStorage(Storage):
-    def exists(self, path: str) -> bool:
-        from pathlib import Path
-
-        return Path(path).exists()
-
-    def glob(self, root: str, patterns: list[str]) -> list[str]:
-        from pathlib import Path
-
-        base = Path(root)
-        matches: list[str] = []
-        for pattern in patterns:
-            matches.extend(str(p) for p in base.glob(pattern))
-        return sorted(dict.fromkeys(matches))
-
-    def read_text(self, path: str) -> str:
-        from pathlib import Path
-
-        return Path(path).read_text(encoding="utf-8")
-
-
-class SSHStorage(Storage):
-    def __init__(self, host: str):
-        self.host = host
-
-    def _call(self, payload: dict[str, Any]) -> dict[str, Any]:
-        helper_b64 = base64.b64encode(REMOTE_HELPER.encode("utf-8")).decode("ascii")
-        remote_python = f"import base64; exec(base64.b64decode({helper_b64!r}).decode('utf-8'))"
-        proc = subprocess.run(
-            ["ssh", self.host, f"python3 -c {shlex.quote(remote_python)}"],
-            input=json.dumps(payload, ensure_ascii=False),
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            raise ProjectUnderstandingError(
-                f"Remote command failed on {self.host}: {proc.stderr.strip() or proc.stdout.strip()}"
-            )
-        return json.loads(proc.stdout or "{}")
-
-    def exists(self, path: str) -> bool:
-        return bool(self._call({"action": "exists", "path": path})["exists"])
-
-    def glob(self, root: str, patterns: list[str]) -> list[str]:
-        return list(self._call({"action": "glob", "root": root, "patterns": patterns})["matches"])
-
-    def read_text(self, path: str) -> str:
-        return self._call({"action": "read_text", "path": path})["text"]
-
-
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
 
-def _storage(target: StorageTarget) -> Storage:
-    return SSHStorage(target.ssh_host) if target.is_remote else LocalStorage()
-
-
-def _join(root: str, *parts: str) -> str:
-    return str(PurePosixPath(root, *parts))
-
-
 def inspect_project(project_root: str, ssh_host: str | None = None) -> dict[str, Any]:
-    target = StorageTarget(project_root=project_root, ssh_host=ssh_host)
-    storage = _storage(target)
+    target = TargetSpec(project_root=project_root, ssh_host=ssh_host)
+    storage = default_storage(target)
 
     candidates = {
         "claude_md": _join(project_root, "CLAUDE.md"),

@@ -1,19 +1,16 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import csv
 import json
-import shlex
-import subprocess
-from dataclasses import dataclass
 from datetime import datetime
 from io import StringIO
-from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from omegaconf import OmegaConf
 import pandas as pd
+
+from utils import TargetSpec, Storage, LocalStorage, SSHStorage, default_storage as _default_storage, join as _join
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
 RunStatus = Literal["created", "running", "finished", "failed", "killed", "inconclusive"]
@@ -35,177 +32,10 @@ RESULTS_COLUMNS = [
 ]
 
 
-REMOTE_HELPER = r'''
-import json
-import sys
-from pathlib import Path
-
-
-def load_payload() -> dict:
-    return json.load(sys.stdin)
-
-
-def dump(value):
-    sys.stdout.write(json.dumps(value, ensure_ascii=False))
-
-
-payload = load_payload()
-action = payload["action"]
-
-if action == "mkdir":
-    path = Path(payload["path"])
-    path.mkdir(parents=True, exist_ok=True)
-    dump({"ok": True})
-elif action == "write_text":
-    path = Path(payload["path"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(payload["text"], encoding="utf-8")
-    dump({"ok": True})
-elif action == "append_text":
-    path = Path(payload["path"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as f:
-        f.write(payload["text"])
-    dump({"ok": True})
-elif action == "read_text":
-    path = Path(payload["path"])
-    dump({"text": path.read_text(encoding="utf-8")})
-elif action == "exists":
-    path = Path(payload["path"])
-    dump({"exists": path.exists()})
-elif action == "list_dir_names":
-    path = Path(payload["path"])
-    if not path.exists():
-        dump({"names": []})
-    else:
-        names = sorted([p.name for p in path.iterdir()])
-        dump({"names": names})
-else:
-    raise ValueError(f"Unsupported remote action: {action}")
-'''
-
-
 class SessionManagerError(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
-class TargetSpec:
-    project_root: str
-    ssh_host: str | None = None
-
-    @property
-    def is_remote(self) -> bool:
-        return self.ssh_host is not None
-
-    @property
-    def label(self) -> str:
-        return f"{self.ssh_host}:{self.project_root}" if self.is_remote else self.project_root
-
-
-class Storage:
-    def mkdir(self, path: str) -> None:
-        raise NotImplementedError
-
-    def write_text(self, path: str, text: str) -> None:
-        raise NotImplementedError
-
-    def append_text(self, path: str, text: str) -> None:
-        raise NotImplementedError
-
-    def read_text(self, path: str) -> str:
-        raise NotImplementedError
-
-    def exists(self, path: str) -> bool:
-        raise NotImplementedError
-
-    def list_dir_names(self, path: str) -> list[str]:
-        raise NotImplementedError
-
-
-class LocalStorage(Storage):
-    def mkdir(self, path: str) -> None:
-        from pathlib import Path
-
-        Path(path).mkdir(parents=True, exist_ok=True)
-
-    def write_text(self, path: str, text: str) -> None:
-        from pathlib import Path
-
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text, encoding="utf-8")
-
-    def append_text(self, path: str, text: str) -> None:
-        from pathlib import Path
-
-        p = Path(path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("a", encoding="utf-8") as f:
-            f.write(text)
-
-    def read_text(self, path: str) -> str:
-        from pathlib import Path
-
-        return Path(path).read_text(encoding="utf-8")
-
-    def exists(self, path: str) -> bool:
-        from pathlib import Path
-
-        return Path(path).exists()
-
-    def list_dir_names(self, path: str) -> list[str]:
-        from pathlib import Path
-
-        p = Path(path)
-        if not p.exists():
-            return []
-        return sorted(child.name for child in p.iterdir())
-
-
-class SSHStorage(Storage):
-    def __init__(self, host: str):
-        self.host = host
-
-    def _call(self, payload: dict[str, Any]) -> dict[str, Any]:
-        helper_b64 = base64.b64encode(REMOTE_HELPER.encode("utf-8")).decode("ascii")
-        remote_python = f"import base64; exec(base64.b64decode({helper_b64!r}).decode('utf-8'))"
-        command = ["ssh", self.host, f"python3 -c {shlex.quote(remote_python)}"]
-        proc = subprocess.run(
-            command,
-            input=json.dumps(payload, ensure_ascii=False),
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            raise SessionManagerError(
-                f"Remote command failed on {self.host}: {proc.stderr.strip() or proc.stdout.strip()}"
-            )
-        output = proc.stdout.strip()
-        if not output:
-            return {}
-        try:
-            return json.loads(output)
-        except json.JSONDecodeError as exc:
-            raise SessionManagerError(f"Failed to decode remote JSON response: {output!r}") from exc
-
-    def mkdir(self, path: str) -> None:
-        self._call({"action": "mkdir", "path": path})
-
-    def write_text(self, path: str, text: str) -> None:
-        self._call({"action": "write_text", "path": path, "text": text})
-
-    def append_text(self, path: str, text: str) -> None:
-        self._call({"action": "append_text", "path": path, "text": text})
-
-    def read_text(self, path: str) -> str:
-        return self._call({"action": "read_text", "path": path})["text"]
-
-    def exists(self, path: str) -> bool:
-        return bool(self._call({"action": "exists", "path": path})["exists"])
-
-    def list_dir_names(self, path: str) -> list[str]:
-        return list(self._call({"action": "list_dir_names", "path": path})["names"])
 
 def _stringify(value: Any) -> str:
     if value is None:
@@ -217,8 +47,6 @@ def _stringify(value: Any) -> str:
 def _now_iso() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
-def _default_storage(target: TargetSpec) -> Storage:
-    return SSHStorage(target.ssh_host) if target.is_remote else LocalStorage()
 
 
 def _load_results_dataframe(storage: Storage, results_path: str, columns: list[str]) -> pd.DataFrame:
@@ -271,9 +99,6 @@ def _upsert_results_row(storage: Storage, results_path: str, columns: list[str],
     _write_results_dataframe(storage, results_path, df, columns)
     return normalized_row
 
-
-def _join(root: str, *parts: str) -> str:
-    return str(PurePosixPath(root, *parts))
 
 
 def _safe_int(value: Any) -> int | None:
