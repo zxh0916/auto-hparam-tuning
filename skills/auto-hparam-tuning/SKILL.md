@@ -80,7 +80,7 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
     a. CREATE RUN:    session_manager.py create-run {SESSION_DIR} (repeat for parallel runs)
     b. TUNE:          Review strategy.md. Decide hparam changes, write override.yaml in run dir
     c. OVERRIDE:      Overwrite the content of the override.yaml that lies within the same directory as the primary config file with the content of run/<runId>/override.yaml
-    d. EXECUTE:       Launch training with overrides with specified conda environment.
+    d. EXECUTE:       Start the run with `python scripts/session_manager.py[ --ssh-host "remotehost"] run-command /path/to/the/session --run-id <run_id> --command-str "the python command"[ --conda-env env]` and query the status with `python scripts/session_manager.py[ --ssh-host "remotehost"] run-command /path/to/the/session --run-id <run_id>`
     e. COPYBACK:      (remote only) Once the test run complete, copy back the event file and the hydra config back to the /tmp file from the remote.
     f. ANALYZE:       Analyze_event.py on event file → curve statistics
     g. RECORD:        Session_manager.py update-run with metrics and status

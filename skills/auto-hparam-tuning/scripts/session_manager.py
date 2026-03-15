@@ -8,6 +8,7 @@ import subprocess
 from datetime import datetime
 from io import StringIO
 from typing import Any, Literal
+from pathlib import Path
 
 from omegaconf import OmegaConf
 import pandas as pd
@@ -394,6 +395,12 @@ def update_run_result(
     return {"results_csv": results_path, "row": normalized_row}
 
 
+def _tmux_session_name(session_dir: str, run_id: int) -> str:
+    import hashlib
+    h = hashlib.md5(session_dir.encode()).hexdigest()[:8]
+    return f"aht-{h}-{run_id}"
+
+
 def run_command(
     session_dir: str,
     run_id: int,
@@ -401,88 +408,120 @@ def run_command(
     conda_env: str | None = None,
     cwd: str | None = None,
     ssh_host: str | None = None,
+    use_tmux: bool = True,
 ) -> dict[str, Any]:
-    """Execute *command* inside the run directory, streaming stdout/stderr to the
-    log files that were created by ``create_run``.
+    """Execute *command* for a run, redirecting stdout/stderr to the run's log files.
 
-    The run status in results.csv is updated to ``"running"`` before the
-    subprocess starts and to ``"finished"`` or ``"failed"`` once it exits.
+    When *use_tmux* is True (default), the command is launched in a detached
+    tmux session and this function returns immediately with status ``"running"``.
+    Call ``poll_run`` to check completion and update results.csv.
+
+    When *use_tmux* is False, execution is synchronous (blocks until done).
 
     Args:
         session_dir: AHT session directory (absolute path on the target host).
         run_id: Integer run ID returned by ``create_run``.
         command: Shell command to execute.
-        conda_env: If given, wrap the command with ``conda run -n <env>``.
-        cwd: Working directory for the command on the target host.
-            Defaults to the session directory.
-        ssh_host: SSH host string.  ``None`` means local execution.
+        conda_env: Conda environment to activate via
+            ``bash -i -c "conda activate <env> && <cmd>"``.
+        cwd: Working directory on the target host. Defaults to the project root
+            inferred from session_dir (three levels up).
+        ssh_host: SSH host string. ``None`` means local execution.
+        use_tmux: Launch asynchronously via a detached tmux session (default).
+            Set to False for synchronous execution without tmux.
 
     Returns:
-        Dict with ``run_id``, ``run_dir``, ``stdout_path``, ``stderr_path``,
-        ``returncode``, ``status``, ``start_time``, ``end_time``.
+        Dict with run metadata. When async, ``"status"`` is ``"running"`` and
+        ``"tmux_session"`` holds the session name for use with ``poll_run``.
+        When sync, ``"returncode"`` and final ``"status"`` are included.
     """
     run_dir = _join(session_dir, "runs", str(run_id))
     stdout_path = _join(run_dir, "stdout.log")
     stderr_path = _join(run_dir, "stderr.log")
-    effective_cwd = cwd or session_dir
+    effective_cwd = cwd or Path(session_dir).parent.parent.parent.resolve().as_posix()
 
-    # Wrap with conda if requested.
     if conda_env:
-        shell_cmd = "conda run -n " + shlex.quote(conda_env) + " bash -c " + shlex.quote(command)
+        inner = "conda activate " + shlex.quote(conda_env) + " && " + command
+        shell_cmd = "bash -i -c " + shlex.quote(inner)
     else:
         shell_cmd = command
 
     start_time = _now_iso()
     update_run_result(session_dir, run_id, status="running", start_time=start_time, ssh_host=ssh_host)
 
+    if use_tmux:
+        tmux_name = _tmux_session_name(session_dir, run_id)
+        returncode_path = _join(run_dir, "returncode.txt")
+        full_cmd = (
+            "cd " + shlex.quote(effective_cwd)
+            + " && " + shell_cmd
+            + " >" + shlex.quote(stdout_path)
+            + " 2>" + shlex.quote(stderr_path)
+            + "; echo $? >" + shlex.quote(returncode_path)
+        )
+        tmux_argv = ["tmux", "new-session", "-d", "-s", tmux_name, full_cmd]
+
+        if ssh_host is None:
+            proc = subprocess.run(tmux_argv, capture_output=True, text=True)
+        else:
+            print(" ".join(["ssh", ssh_host, " ".join(shlex.quote(a) for a in tmux_argv)]))
+            proc = subprocess.run(
+                ["ssh", ssh_host, " ".join(shlex.quote(a) for a in tmux_argv)],
+                capture_output=True,
+                text=True,
+            )
+
+        if proc.returncode != 0:
+            update_run_result(session_dir, run_id, status="failed", end_time=_now_iso(), ssh_host=ssh_host)
+            raise SessionManagerError(f"tmux launch failed: {proc.stderr.strip() or proc.stdout.strip()}")
+
+        storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
+        storage.write_text(_join(run_dir, "tmux_session.txt"), tmux_name)
+
+        return {
+            "run_id": run_id,
+            "run_dir": run_dir,
+            "stdout_path": stdout_path,
+            "stderr_path": stderr_path,
+            "tmux_session": tmux_name,
+            "status": "running",
+            "start_time": start_time,
+            "cwd": effective_cwd,
+            "next_step":
+                "Query the run with " + 
+                "`python scripts/session_manager.py " +
+                f"--ssh-host \"{ssh_host}\" " +
+                f"poll-run {session_dir} --run-id {run_id}`"
+        }
+
+    # ── Synchronous fallback ─────────────────────────────────────────────────
     try:
         if ssh_host is None:
-            # ── Local execution ──────────────────────────────────────────────
             with open(stdout_path, "w", encoding="utf-8") as out_f, \
                     open(stderr_path, "w", encoding="utf-8") as err_f:
                 proc = subprocess.run(
-                    shell_cmd,
-                    shell=True,
-                    cwd=effective_cwd,
-                    stdout=out_f,
-                    stderr=err_f,
+                    shell_cmd, shell=True, cwd=effective_cwd,
+                    stdout=out_f, stderr=err_f,
                 )
             returncode = proc.returncode
         else:
-            # ── Remote execution via SSH ─────────────────────────────────────
-            # Build a single shell string executed by the remote bash:
-            #   cd <cwd> && <cmd> ><stdout_path> 2><stderr_path>
             remote_cmd = (
                 "cd " + shlex.quote(effective_cwd)
                 + " && " + shell_cmd
                 + " >" + shlex.quote(stdout_path)
                 + " 2>" + shlex.quote(stderr_path)
             )
-            proc = subprocess.run(
-                ["ssh", ssh_host, remote_cmd],
-                capture_output=True,
-                text=True,
-            )
+            print(" ".join(["ssh", ssh_host, f"\"{remote_cmd}\""]))
+            proc = subprocess.run(["ssh", ssh_host, f"\"{remote_cmd}\""], capture_output=True, text=True)
             returncode = proc.returncode
     except Exception as exc:
         end_time = _now_iso()
-        update_run_result(
-            session_dir, run_id,
-            status="failed",
-            end_time=end_time,
-            notes=str(exc),
-            ssh_host=ssh_host,
-        )
+        update_run_result(session_dir, run_id, status="failed", end_time=end_time, notes=str(exc), ssh_host=ssh_host)
         raise
 
     end_time = _now_iso()
     status: RunStatus = "finished" if returncode == 0 else "failed"
-    update_run_result(
-        session_dir, run_id,
-        status=status,
-        end_time=end_time,
-        ssh_host=ssh_host,
-    )
+    update_run_result(session_dir, run_id, status=status, end_time=end_time, ssh_host=ssh_host)
 
     return {
         "run_id": run_id,
@@ -493,6 +532,91 @@ def run_command(
         "status": status,
         "start_time": start_time,
         "end_time": end_time,
+        "cwd": effective_cwd,
+    }
+
+
+def poll_run(
+    session_dir: str,
+    run_id: int,
+    ssh_host: str | None = None,
+) -> dict[str, Any]:
+    """Check whether a tmux-launched run has finished and update results.csv.
+
+    Reads the tmux session name from ``<run_dir>/tmux_session.txt`` and queries
+    ``tmux has-session``.  If the session is gone, reads the exit code from
+    ``<run_dir>/returncode.txt``, updates results.csv, and returns the final status.
+
+    Args:
+        session_dir: AHT session directory.
+        run_id: Integer run ID.
+        ssh_host: SSH host string. ``None`` means local.
+
+    Returns:
+        Dict with ``run_id``, ``status``, ``returncode`` (None if still running),
+        and ``tmux_session``.
+    """
+    run_dir = _join(session_dir, "runs", str(run_id))
+    tmux_session_file = _join(run_dir, "tmux_session.txt")
+    returncode_path = _join(run_dir, "returncode.txt")
+
+    storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
+    if not storage.exists(tmux_session_file):
+        raise SessionManagerError(
+            f"No tmux_session.txt found for run {run_id}. "
+            "Was run-command called with tmux enabled?"
+        )
+
+    tmux_name = storage.read_text(tmux_session_file).strip()
+    check_argv = ["tmux", "has-session", "-t", tmux_name]
+
+    if ssh_host is None:
+        check = subprocess.run(check_argv, capture_output=True)
+    else:
+        check = subprocess.run(
+            ["ssh", ssh_host, " ".join(shlex.quote(a) for a in check_argv)],
+            capture_output=True,
+        )
+
+    if check.returncode == 0:
+        return {
+            "run_id": run_id,
+            "run_dir": run_dir,
+            "tmux_session": tmux_name,
+            "status": "running",
+            "returncode": None,
+        }
+
+    # Session is gone → read exit code and finalize
+    returncode: int | None = None
+    if storage.exists(returncode_path):
+        try:
+            returncode = int(storage.read_text(returncode_path).strip())
+        except ValueError:
+            pass
+
+    status: RunStatus = "finished" if returncode == 0 else "failed"
+    end_time = _now_iso()
+    update_run_result(session_dir, run_id, status=status, end_time=end_time, ssh_host=ssh_host)
+    
+    next_step = []
+    if status == "finished":
+        if ssh_host is not None:
+            next_step.append("Copy the event file and the full config file back to local disk.")
+        next_step.append("Run `python scripts/analyze_event.py list-keys /path/to/the/local/event/file` to list scalar keys.")
+        next_step.append("Then run `python scripts/analyze_event.py summarize /path/to/the/local/event/file key1 key2 keyn` to analyze the selected scalar events.")
+    else:
+        next_step.append("Run failed.")
+        
+
+    return {
+        "run_id": run_id,
+        "run_dir": run_dir,
+        "tmux_session": tmux_name,
+        "status": status,
+        "returncode": returncode,
+        "end_time": end_time,
+        "next_step": next_step
     }
 
 
@@ -545,7 +669,7 @@ def parse_args() -> argparse.Namespace:
 
     p_update = subparsers.add_parser("update-run", help="Insert or update one run row in results.csv.")
     p_update.add_argument("session_dir")
-    p_update.add_argument("run_id", type=int)
+    p_update.add_argument("--run-id", type=int)
     p_update.add_argument("--run-name", default=None)
     p_update.add_argument("--status", default=None)
     p_update.add_argument("--primary-metric", default=None)
@@ -577,23 +701,36 @@ def parse_args() -> argparse.Namespace:
 
     p_exec = subparsers.add_parser(
         "run-command",
-        help="Execute a shell command for a run, redirecting stdout/stderr to the run's log files.",
+        help="Launch a shell command for a run via tmux (async) or synchronously.",
     )
-    p_exec.add_argument("session_dir", help="AHT session directory.")
-    p_exec.add_argument("run_id", type=int, help="Run ID returned by create-run.")
-    p_exec.add_argument("command_str", metavar="command", help="Shell command to execute.")
+    p_exec.add_argument("session_dir")
+    p_exec.add_argument("--run-id", type=int, required=True, help="Run ID returned by create-run.")
+    p_exec.add_argument("--command-str", metavar="command", required=True, help="Shell command to execute.")
     p_exec.add_argument(
         "--conda-env",
         default=None,
         metavar="ENV",
-        help="Conda environment name. When set, the command is wrapped with 'conda run -n ENV'.",
+        help="Conda environment to activate via 'bash -i -c \"conda activate ENV && cmd\"'.",
     )
     p_exec.add_argument(
         "--cwd",
         default=None,
         metavar="DIR",
-        help="Working directory for the command on the target host. Defaults to the session directory.",
+        help="Working directory on the target host. Defaults to the project root.",
     )
+    p_exec.add_argument(
+        "--no-tmux",
+        action="store_true",
+        default=False,
+        help="Disable tmux and run synchronously (blocks until the command finishes).",
+    )
+
+    p_poll = subparsers.add_parser(
+        "poll-run",
+        help="Check if a tmux-launched run has finished and update results.csv.",
+    )
+    p_poll.add_argument("session_dir")
+    p_poll.add_argument("--run-id", type=int, required=True, help="Run ID to poll.")
 
     return parser.parse_args()
 
@@ -657,6 +794,13 @@ def main() -> None:
             command=args.command_str,
             conda_env=args.conda_env,
             cwd=args.cwd,
+            ssh_host=args.ssh_host,
+            use_tmux=not args.no_tmux,
+        )
+    elif args.command == "poll-run":
+        result = poll_run(
+            session_dir=args.session_dir,
+            run_id=args.run_id,
             ssh_host=args.ssh_host,
         )
     else:

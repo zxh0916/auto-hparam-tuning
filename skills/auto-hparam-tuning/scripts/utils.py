@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -177,7 +178,8 @@ class SSHStorage(Storage):
         self.host = host
 
     def _call(self, payload: dict[str, Any]) -> dict[str, Any]:
-        command = ["ssh", self.host, "python3", "-c", REMOTE_HELPER]
+        remote_cmd = f"python3 -c {shlex.quote(REMOTE_HELPER)}"
+        command = ["ssh", self.host, remote_cmd]
         proc = subprocess.run(
             command,
             input=json.dumps(payload, ensure_ascii=False),
@@ -193,8 +195,14 @@ class SSHStorage(Storage):
             return {}
         try:
             return json.loads(output)
-        except json.JSONDecodeError as exc:
-            raise StorageError(f"Failed to decode remote JSON response: {output!r}") from exc
+        except json.JSONDecodeError:
+            lines = [line.strip() for line in output.splitlines() if line.strip()]
+            for line in reversed(lines):
+                try:
+                    return json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+            raise StorageError(f"Failed to decode remote JSON response: {output!r}")
 
     def mkdir(self, path: str) -> None:
         self._call({"action": "mkdir", "path": path})
