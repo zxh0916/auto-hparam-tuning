@@ -111,7 +111,7 @@ class ProjectInspector:
         }
 
     def prepare_run_understanding(self, run_command: str) -> dict[str, Any]:
-        assert self.need_generate_project_md and self.need_generate_hparam_md, \
+        assert (not self.need_generate_project_md) and (not self.need_generate_hparam_md), \
             "One of project summary and hparam structure is not found. Please run `python scripts/project_understanding.py inspect-project` first."
         available_context = [
             info["path"] for info in self.docs.values() if info["exists"]
