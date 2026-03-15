@@ -540,6 +540,7 @@ def poll_run(
     session_dir: str,
     run_id: int,
     ssh_host: str | None = None,
+    tail_lines: int = 50,
 ) -> dict[str, Any]:
     """Check whether a tmux-launched run has finished and update results.csv.
 
@@ -551,10 +552,12 @@ def poll_run(
         session_dir: AHT session directory.
         run_id: Integer run ID.
         ssh_host: SSH host string. ``None`` means local.
+        tail_lines: Number of trailing lines from stdout.log to include in the
+            response. Set to 0 to omit. Defaults to 50.
 
     Returns:
         Dict with ``run_id``, ``status``, ``returncode`` (None if still running),
-        and ``tmux_session``.
+        ``tmux_session``, and ``stdout_tail``.
     """
     run_dir = _join(session_dir, "runs", str(run_id))
     tmux_session_file = _join(run_dir, "tmux_session.txt")
@@ -578,6 +581,17 @@ def poll_run(
             capture_output=True,
         )
 
+    stdout_path = _join(run_dir, "stdout.log")
+
+    def _read_tail(path: str) -> str:
+        if not storage.exists(path):
+            return ""
+        text = storage.read_text(path)
+        if not tail_lines:
+            return text
+        lines = text.splitlines()
+        return "\n".join(lines[-tail_lines:]) if len(lines) > tail_lines else text
+
     if check.returncode == 0:
         return {
             "run_id": run_id,
@@ -585,6 +599,8 @@ def poll_run(
             "tmux_session": tmux_name,
             "status": "running",
             "returncode": None,
+            "stdout_tail": _read_tail(stdout_path),
+            "next_step": "Extract the remaining time from the stdout, wait, and poll again."
         }
 
     # Session is gone → read exit code and finalize
@@ -606,7 +622,7 @@ def poll_run(
         next_step.append("Run `python scripts/analyze_event.py list-keys /path/to/the/local/event/file` to list scalar keys.")
         next_step.append("Then run `python scripts/analyze_event.py summarize /path/to/the/local/event/file key1 key2 keyn` to analyze the selected scalar events.")
     else:
-        next_step.append("Run failed.")
+        next_step.append("Run failed. Now try to figure out what's wrong according to the stdout.")
         
 
     return {
@@ -616,6 +632,7 @@ def poll_run(
         "status": status,
         "returncode": returncode,
         "end_time": end_time,
+        "stdout_tail": _read_tail(stdout_path),
         "next_step": next_step
     }
 
@@ -731,6 +748,13 @@ def parse_args() -> argparse.Namespace:
     )
     p_poll.add_argument("session_dir")
     p_poll.add_argument("--run-id", type=int, required=True, help="Run ID to poll.")
+    p_poll.add_argument(
+        "--tail",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Include the last N lines of stdout.log in the response. 0 = full log. (default: 50)",
+    )
 
     return parser.parse_args()
 
@@ -802,6 +826,7 @@ def main() -> None:
             session_dir=args.session_dir,
             run_id=args.run_id,
             ssh_host=args.ssh_host,
+            tail_lines=args.tail,
         )
     else:
         raise SessionManagerError(f"Unsupported command: {args.command}")
