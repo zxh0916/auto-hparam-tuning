@@ -424,7 +424,16 @@ def summarize_results(
         })
 
     trend_hint = "insufficient_metric_history"
-    recent_metric_rows = metric_rows[-3:]
+    # Use the most recent metric-bearing runs in run-id order to compute trend,
+    # rather than the metric-sorted `metric_rows`.
+    recent_metric_rows: list[dict[str, Any]] = []
+    for row in reversed(working):
+        if row["primary_metric_float"] is None:
+            continue
+        recent_metric_rows.append(row)
+        if len(recent_metric_rows) >= 3:
+            break
+    recent_metric_rows = list(reversed(recent_metric_rows))
     if len(recent_metric_rows) >= 2:
         values = [row["primary_metric_float"] for row in recent_metric_rows]
         deltas = [b - a for a, b in zip(values[:-1], values[1:])]
