@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import json
+import shlex
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime
@@ -166,7 +168,9 @@ class SSHStorage(Storage):
         self.host = host
 
     def _call(self, payload: dict[str, Any]) -> dict[str, Any]:
-        command = ["ssh", self.host, "python3", "-c", REMOTE_HELPER]
+        helper_b64 = base64.b64encode(REMOTE_HELPER.encode("utf-8")).decode("ascii")
+        remote_python = f"import base64; exec(base64.b64decode({helper_b64!r}).decode('utf-8'))"
+        command = ["ssh", self.host, f"python3 -c {shlex.quote(remote_python)}"]
         proc = subprocess.run(
             command,
             input=json.dumps(payload, ensure_ascii=False),
@@ -247,7 +251,7 @@ def _write_results_dataframe(storage: Storage, results_path: str, df: pd.DataFra
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=columns, lineterminator="\n")
     writer.writeheader()
-    writer.writerows(normalized)
+    writer.writerows(normalized.to_dict(orient="records"))
     storage.write_text(results_path, buffer.getvalue())
 
 

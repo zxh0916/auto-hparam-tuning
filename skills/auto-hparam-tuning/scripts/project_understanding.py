@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
+import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -86,8 +88,10 @@ class SSHStorage(Storage):
         self.host = host
 
     def _call(self, payload: dict[str, Any]) -> dict[str, Any]:
+        helper_b64 = base64.b64encode(REMOTE_HELPER.encode("utf-8")).decode("ascii")
+        remote_python = f"import base64; exec(base64.b64decode({helper_b64!r}).decode('utf-8'))"
         proc = subprocess.run(
-            ["ssh", self.host, "python3", "-c", REMOTE_HELPER],
+            ["ssh", self.host, f"python3 -c {shlex.quote(remote_python)}"],
             input=json.dumps(payload, ensure_ascii=False),
             capture_output=True,
             text=True,
