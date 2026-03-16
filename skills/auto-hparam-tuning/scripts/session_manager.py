@@ -484,6 +484,29 @@ class SessionManager:
             )
 
         if check.returncode == 0:
+            next_step = [
+                "The run is not completed yet. Please estimate the remaining time from stdout_tail, " +
+                "formalize the remaining time using `python scripts/eta.py`, " +
+                "then call `cron.add` with following parameters to remind yourself when it completes:\n" +
+                json.dumps({
+                    "name": "AHT poll",
+                    "schedule": {
+                        "kind": "at",
+                        "at": "<result of `python scripts/eta.py <remaining time>`>"
+                    },
+                    "sessionTarget": "main",
+                    "wakeMode": "now",
+                    "payload": {
+                        "kind": "systemEvent",
+                        "text": 
+                            "According to the remaining time estimation, one AHT run should have finished. " +
+                            f"Query the run with `python scripts/session_manager.py {self._ssh_prefix()}"
+                            f"poll-run {self.session_dir} --run-id {run_id}`",
+                    },
+                    "deleteAfterRun": "true"
+                }, ensure_ascii=False, indent=2) +
+                next_step_postfix()
+            ]
             return {
                 "run_id": run_id,
                 "run_dir": run_dir,
