@@ -48,6 +48,17 @@ class SessionManagerError(RuntimeError):
     pass
 
 
+def _json_safe_default(obj: Any) -> Any:
+    if hasattr(obj, "item"):
+        try:
+            return obj.item()
+        except Exception:
+            pass
+    if isinstance(obj, Path):
+        return str(obj)
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
 class SessionManager:
     def __init__(self, session_dir: str, ssh_host: Optional[str] = None) -> None:
         self.session_dir = session_dir
@@ -851,7 +862,7 @@ def main() -> None:
         else:
             raise SessionManagerError(f"Unsupported command: {args.command}")
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2, default=_json_safe_default))
 
 
 if __name__ == "__main__":
