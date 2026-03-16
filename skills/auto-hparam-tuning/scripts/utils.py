@@ -4,9 +4,14 @@ import json
 import shlex
 import subprocess
 from dataclasses import dataclass
-from pathlib import PurePosixPath
-from typing import Any
+from pathlib import PurePosixPath, Path
+from typing import Any, Literal
+import csv
+from datetime import datetime
+from io import StringIO
 
+from omegaconf import OmegaConf
+import pandas as pd
 
 # ---------------------------------------------------------------------------
 # Remote helper script (sent verbatim to the remote Python interpreter).
@@ -254,3 +259,164 @@ def get_sessions_spawn_command(label: str, task: str):
             command = command + ", "
     command = command + ")"
     return command
+
+
+def ensure_override_in_defaults(storage: Storage, primary_config_path: str) -> bool:
+    """Ensure ``- override`` appears in the ``defaults`` list after ``- _self_``.
+
+    Three cases handled:
+    - ``defaults`` block exists and already has ``- override``: no-op.
+    - ``defaults`` block exists with ``- _self_``: inserts ``- override`` after it.
+    - No ``defaults`` block at all: appends one at the end of the file with
+      ``- _self_`` and ``- override``.
+
+    The file is rewritten in-place with original formatting preserved.
+    Returns True if the file was modified.
+    """
+    if not storage.exists(primary_config_path):
+        return False
+
+    text = storage.read_text(primary_config_path)
+    lines = text.splitlines(keepends=True)
+
+    in_defaults = False
+    defaults_found = False
+    defaults_indent: int | None = None
+    self_line_idx: int | None = None
+    override_found = False
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not in_defaults:
+            if stripped == "defaults:" or stripped.startswith("defaults:"):
+                in_defaults = True
+                defaults_found = True
+            continue
+        # Inside defaults block: zero-indent non-list line → left the block
+        indent = len(line) - len(line.lstrip())
+        if stripped and not stripped.startswith("-") and not stripped.startswith("#"):
+            if indent == 0:
+                break
+        if stripped.startswith("-"):
+            if defaults_indent is None:
+                defaults_indent = indent
+            item = stripped[1:].strip()
+            if item == "_self_":
+                self_line_idx = i
+            elif item == "override":
+                override_found = True
+                break
+
+    if override_found:
+        return False
+
+    if not defaults_found:
+        # No defaults block at all — append one at the end
+        suffix = "" if text.endswith("\n") else "\n"
+        storage.write_text(primary_config_path, text + suffix + "defaults:\n  - _self_\n  - override\n")
+        return True
+
+    # defaults block exists but override is missing
+    indent_str = " " * (defaults_indent if defaults_indent is not None else 2)
+    if self_line_idx is not None:
+        lines.insert(self_line_idx + 1, f"{indent_str}- override\n")
+    else:
+        # _self_ not found — insert override at end of defaults block
+        # Find the last list entry in the block
+        last_list_idx = None
+        in_defaults2 = False
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not in_defaults2:
+                if stripped == "defaults:" or stripped.startswith("defaults:"):
+                    in_defaults2 = True
+                continue
+            indent = len(line) - len(line.lstrip())
+            if stripped and not stripped.startswith("-") and not stripped.startswith("#"):
+                if indent == 0:
+                    break
+            if stripped.startswith("-"):
+                last_list_idx = i
+        insert_at = (last_list_idx + 1) if last_list_idx is not None else len(lines)
+        lines.insert(insert_at, f"{indent_str}- override\n")
+
+    storage.write_text(primary_config_path, "".join(lines))
+    return True
+
+
+def stringify(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+def load_results_dataframe(storage: Storage, results_path: str, columns: list[str]) -> pd.DataFrame:
+    if storage.exists(results_path):
+        text = storage.read_text(results_path)
+        if text.strip():
+            df = pd.read_csv(StringIO(text), dtype=str, keep_default_na=False)
+        else:
+            df = pd.DataFrame(columns=columns)
+    else:
+        df = pd.DataFrame(columns=columns)
+
+    for col in columns:
+        if col not in df.columns:
+            df[col] = ""
+    return df[columns].fillna("")
+
+def write_results_dataframe(storage: Storage, results_path: str, df: pd.DataFrame, columns: list[str]) -> None:
+    normalized = df.copy()
+    for col in columns:
+        if col not in normalized.columns:
+            normalized[col] = ""
+    normalized = normalized[columns].fillna("")
+    if not normalized.empty:
+        normalized["run_id"] = normalized["run_id"].astype(str)
+        normalized = normalized.sort_values(
+            by="run_id",
+            key=lambda s: s.map(lambda x: int(str(x)) if str(x).strip() else 10**18),
+        )
+    buffer = StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=columns, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(normalized.to_dict(orient="records"))
+    storage.write_text(results_path, buffer.getvalue())
+
+def upsert_results_row(storage: Storage, results_path: str, columns: list[str], row: dict[str, Any]) -> dict[str, str]:
+    normalized_row = {col: stringify(row.get(col, "")) for col in columns}
+    df = load_results_dataframe(storage, results_path, columns)
+    key = normalized_row["run_id"]
+    if df.empty:
+        df = pd.DataFrame([normalized_row], columns=columns)
+    else:
+        mask = df["run_id"].astype(str) == key
+        if mask.any():
+            for col in columns:
+                df.loc[mask, col] = normalized_row[col]
+        else:
+            df = pd.concat([df, pd.DataFrame([normalized_row], columns=columns)], ignore_index=True)
+    write_results_dataframe(storage, results_path, df, columns)
+    return normalized_row
+
+def safe_int(value: Any) -> int | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except ValueError:
+        return None
+
+def safe_float(value: Any) -> float | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None

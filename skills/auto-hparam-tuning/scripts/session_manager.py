@@ -20,7 +20,13 @@ from utils import (
     SSHStorage,
     default_storage as _default_storage,
     join as _join,
-    get_sessions_spawn_command
+    get_sessions_spawn_command,
+    ensure_override_in_defaults,
+    load_results_dataframe,
+    safe_int,
+    safe_float,
+    now_iso,
+    upsert_results_row
 )
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
@@ -47,91 +53,6 @@ class SessionManagerError(RuntimeError):
     pass
 
 
-
-def _stringify(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    return str(value)
-
-def _now_iso() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
-
-
-
-def _load_results_dataframe(storage: Storage, results_path: str, columns: list[str]) -> pd.DataFrame:
-    if storage.exists(results_path):
-        text = storage.read_text(results_path)
-        if text.strip():
-            df = pd.read_csv(StringIO(text), dtype=str, keep_default_na=False)
-        else:
-            df = pd.DataFrame(columns=columns)
-    else:
-        df = pd.DataFrame(columns=columns)
-
-    for col in columns:
-        if col not in df.columns:
-            df[col] = ""
-    return df[columns].fillna("")
-
-def _write_results_dataframe(storage: Storage, results_path: str, df: pd.DataFrame, columns: list[str]) -> None:
-    normalized = df.copy()
-    for col in columns:
-        if col not in normalized.columns:
-            normalized[col] = ""
-    normalized = normalized[columns].fillna("")
-    if not normalized.empty:
-        normalized["run_id"] = normalized["run_id"].astype(str)
-        normalized = normalized.sort_values(
-            by="run_id",
-            key=lambda s: s.map(lambda x: int(str(x)) if str(x).strip() else 10**18),
-        )
-    buffer = StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=columns, lineterminator="\n")
-    writer.writeheader()
-    writer.writerows(normalized.to_dict(orient="records"))
-    storage.write_text(results_path, buffer.getvalue())
-
-
-def _upsert_results_row(storage: Storage, results_path: str, columns: list[str], row: dict[str, Any]) -> dict[str, str]:
-    normalized_row = {col: _stringify(row.get(col, "")) for col in columns}
-    df = _load_results_dataframe(storage, results_path, columns)
-    key = normalized_row["run_id"]
-    if df.empty:
-        df = pd.DataFrame([normalized_row], columns=columns)
-    else:
-        mask = df["run_id"].astype(str) == key
-        if mask.any():
-            for col in columns:
-                df.loc[mask, col] = normalized_row[col]
-        else:
-            df = pd.concat([df, pd.DataFrame([normalized_row], columns=columns)], ignore_index=True)
-    _write_results_dataframe(storage, results_path, df, columns)
-    return normalized_row
-
-
-
-def _safe_int(value: Any) -> int | None:
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return int(float(text))
-    except ValueError:
-        return None
-
-
-def _safe_float(value: Any) -> float | None:
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        return None
-
-
 def summarize_results(
     session_dir: str,
     ssh_host: str | None = None,
@@ -142,7 +63,7 @@ def summarize_results(
     storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
     results_path = _join(session_dir, "results.csv")
     meta_path = _join(session_dir, "meta.yaml")
-    df = _load_results_dataframe(storage, results_path, RESULTS_COLUMNS)
+    df = load_results_dataframe(storage, results_path, RESULTS_COLUMNS)
 
     inferred_goal = goal
     meta_text = storage.read_text(meta_path) if storage.exists(meta_path) else ""
@@ -169,9 +90,9 @@ def summarize_results(
         }
 
     working = df.copy()
-    working["run_id_int"] = working["run_id"].map(_safe_int)
-    working["primary_metric_float"] = working["primary_metric"].map(_safe_float)
-    working["best_step_int"] = working["best_step"].map(_safe_int)
+    working["run_id_int"] = working["run_id"].map(safe_int)
+    working["primary_metric_float"] = working["primary_metric"].map(safe_float)
+    working["best_step_int"] = working["best_step"].map(safe_int)
     working = working.sort_values(
         by="run_id_int",
         key=lambda s: s.map(lambda x: x if x is not None else 10**18),
@@ -235,9 +156,9 @@ def summarize_results(
         "run_count": run_count,
         "finished_run_count": int(len(finished_df)),
         "failed_run_count": int(len(failed_df)),
-        "latest_run_id": _safe_int(latest_row["run_id"]),
+        "latest_run_id": safe_int(latest_row["run_id"]),
         "latest_status": latest_row["status"],
-        "latest_primary_metric": _safe_float(latest_row["primary_metric"]),
+        "latest_primary_metric": safe_float(latest_row["primary_metric"]),
         "best_run_id": None if best_row is None else best_row["run_id_int"],
         "best_primary_metric": None if best_row is None else best_row["primary_metric_float"],
         "best_run_status": None if best_row is None else best_row["status"],
@@ -262,9 +183,18 @@ def create_session(
     notes: str | None = None,
     ssh_host: str | None = None,
     timestamp: str | None = None,
+    primary_config_path: str | None = None,
 ) -> dict[str, Any]:
     target = TargetSpec(project_root=project_root, ssh_host=ssh_host)
     storage = _default_storage(target)
+
+    # Derive the override.yaml path that sits next to the primary Hydra config.
+    override_yaml_path: str | None = None
+    config_modified = False
+    if primary_config_path is not None:
+        parent = primary_config_path.rsplit("/", 1)[0] if "/" in primary_config_path else "."
+        override_yaml_path = parent + "/override.yaml"
+        config_modified = ensure_override_in_defaults(storage, primary_config_path)
 
     now = datetime.now().astimezone() if timestamp is None else datetime.fromisoformat(timestamp)
     date_str = now.strftime("%Y-%m-%d")
@@ -297,6 +227,8 @@ def create_session(
         "notes": notes,
         "storage": "ssh" if ssh_host else "local",
         "ssh_host": ssh_host,
+        "primary_config_path": primary_config_path,
+        "override_yaml_path": override_yaml_path,
     }
     storage.write_text(_join(session_dir, "meta.yaml"), OmegaConf.to_yaml(OmegaConf.create(meta)))
 
@@ -309,6 +241,9 @@ def create_session(
         "meta_yaml": _join(session_dir, "meta.yaml"),
         "storage": meta["storage"],
         "ssh_host": ssh_host,
+        "primary_config_path": primary_config_path,
+        "override_yaml_path": override_yaml_path,
+        "primary_config_defaults_modified": config_modified,
         "next_step":
             "Run `python scripts/session_manager.py " +
             f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
@@ -411,16 +346,42 @@ def write_override(
     storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
     storage.write_text(override_path, text)
 
+    # Also copy to the override.yaml that lives next to the primary Hydra config,
+    # whose path is recorded in meta.yaml by create_session().
+    meta_path = _join(session_dir, "meta.yaml")
+    override_yaml_path: str | None = None
+    sync_warning: str | None = None
+    try:
+        if not storage.exists(meta_path):
+            sync_warning = f"meta.yaml not found at {meta_path}; skipping config-dir sync."
+        else:
+            try:
+                meta_cfg = OmegaConf.create(storage.read_text(meta_path))
+            except Exception as exc:
+                sync_warning = f"Failed to parse meta.yaml: {exc}; skipping config-dir sync."
+                meta_cfg = None
+            if meta_cfg is not None:
+                override_yaml_path = meta_cfg.get("override_yaml_path") or None
+                if not override_yaml_path:
+                    sync_warning = "meta.yaml has no override_yaml_path (was create-session called with --primary-config-path?)."
+                else:
+                    try:
+                        storage.write_text(override_yaml_path, text)
+                    except Exception as exc:
+                        sync_warning = f"Wrote run override but failed to sync to {override_yaml_path}: {exc}"
+                        override_yaml_path = None
+    except Exception as exc:
+        sync_warning = f"Unexpected error during config-dir sync: {exc}"
+
     return {
         "run_id": run_id,
         "override_path": override_path,
+        "override_yaml_path": override_yaml_path,
+        "sync_warning": sync_warning,
         "yaml_content": text,
-        "next_step": 
-            # TODO: use `cp` to copy the file
-            "Copy the content of the override.yaml into the config file with the same name " +
-            "that is placed inside the same directory as the primary config file. " +
-            "Then start a run with `python scripts/session_manager.py " +
-            f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "" +
+        "next_step":
+            "Start a run with `python scripts/session_manager.py " +
+            (f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "") +
             f"run-command {session_dir} --run-id {run_id} " +
             "--conda-env \"specified_conda_env\" --command-str \"specified_command\""
     }
@@ -460,7 +421,7 @@ def update_run_result(
         "end_time": end_time,
         "notes": notes,
     }
-    normalized_row = _upsert_results_row(storage, results_path, RESULTS_COLUMNS, row)
+    normalized_row = upsert_results_row(storage, results_path, RESULTS_COLUMNS, row)
     return {
         "results_csv": results_path,
         "row": normalized_row,
@@ -522,7 +483,7 @@ def run_command(
     else:
         shell_cmd = command
 
-    start_time = _now_iso()
+    start_time = now_iso()
     update_run_result(session_dir, run_id, status="running", start_time=start_time, ssh_host=ssh_host)
 
     if use_tmux:
@@ -548,7 +509,7 @@ def run_command(
             )
 
         if proc.returncode != 0:
-            update_run_result(session_dir, run_id, status="failed", end_time=_now_iso(), ssh_host=ssh_host)
+            update_run_result(session_dir, run_id, status="failed", end_time=now_iso(), ssh_host=ssh_host)
             raise SessionManagerError(f"tmux launch failed: {proc.stderr.strip() or proc.stdout.strip()}")
 
         storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
@@ -591,11 +552,11 @@ def run_command(
             proc = subprocess.run(["ssh", ssh_host, f"\"{remote_cmd}\""], capture_output=True, text=True)
             returncode = proc.returncode
     except Exception as exc:
-        end_time = _now_iso()
+        end_time = now_iso()
         update_run_result(session_dir, run_id, status="failed", end_time=end_time, notes=str(exc), ssh_host=ssh_host)
         raise
 
-    end_time = _now_iso()
+    end_time = now_iso()
     status: RunStatus = "finished" if returncode == 0 else "failed"
     update_run_result(session_dir, run_id, status=status, end_time=end_time, ssh_host=ssh_host)
     
@@ -698,7 +659,7 @@ def poll_run(
             pass
 
     status: RunStatus = "finished" if returncode == 0 else "failed"
-    end_time = _now_iso()
+    end_time = now_iso()
     update_run_result(session_dir, run_id, status=status, end_time=end_time, ssh_host=ssh_host)
     
     next_step = []
@@ -760,7 +721,7 @@ def finalize_session(
     cfg.status = status
     if notes is not None:
         cfg.notes = notes
-    cfg.ended_at = ended_at or _now_iso()
+    cfg.ended_at = ended_at or now_iso()
     storage.write_text(meta_path, OmegaConf.to_yaml(cfg))
     return {"meta_yaml": meta_path, "status": status}
 
@@ -781,6 +742,17 @@ def parse_args() -> argparse.Namespace:
     p_create.add_argument("--skill", default="auto-hparam-tuning")
     p_create.add_argument("--notes", default=None)
     p_create.add_argument("--timestamp", default=None, help="ISO timestamp override for reproducible tests.")
+    p_create.add_argument(
+        "--primary-config-path",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Absolute path to the primary Hydra config file (e.g. conf/config.yaml). "
+            "When provided: (1) '- override' is inserted into its defaults list after '- _self_' "
+            "if not already present; (2) the path to the sibling override.yaml is recorded in "
+            "meta.yaml and used by write-override to sync overrides automatically."
+        ),
+    )
 
     p_run = subparsers.add_parser("create-run", help="Create the next run directory inside a session.")
     p_run.add_argument("session_dir")
@@ -899,6 +871,7 @@ def main() -> None:
             notes=args.notes,
             ssh_host=args.ssh_host,
             timestamp=args.timestamp,
+            primary_config_path=args.primary_config_path,
         )
     elif args.command == "create-run":
         result = create_run(session_dir=args.session_dir, ssh_host=args.ssh_host, notes=args.notes)
