@@ -22,6 +22,7 @@ from utils import (
     safe_float,
     now_iso,
     upsert_results_row,
+    next_step_postfix
 )
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
@@ -147,8 +148,9 @@ class SessionManager:
             "next_step":
                 "Run `python scripts/session_manager.py " +
                 (f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "") +
-                f"append-report {session_dir} \"your understandings to the task\"` "
-                "to write down your understandings to the task.",
+                f"append-report {session_dir} \"your understandings to the task\"` " +
+                "to write down your understandings to the task." +
+                next_step_postfix()
         }
         return mgr, result
 
@@ -218,7 +220,8 @@ class SessionManager:
                 f"Read and follow the instructions in {Path(__file__).parent.parent / 'prompts' / 'plan_tuning_strategy.md'}. "
                 f"Then specify a hparam combination with `python scripts/session_manager.py {self._ssh_prefix()}"
                 f"write-override {self.session_dir} --run-id {next_id} "
-                "--override param0=value0 --override moduleA.param1=value1`",
+                "--override param0=value0 --override moduleA.param1=value1`" +
+                next_step_postfix()
         }
 
     def write_override(
@@ -281,7 +284,8 @@ class SessionManager:
             "next_step":
                 f"Start a run with `python scripts/session_manager.py {self._ssh_prefix()}"
                 f"run-command {self.session_dir} --run-id {run_id} "
-                "--conda-env \"specified_conda_env\" --command-str \"specified_command\"`",
+                "--conda-env \"specified_conda_env\" --command-str \"specified_command\"`" +
+                next_step_postfix()
         }
 
     def update_run_result(
@@ -321,7 +325,8 @@ class SessionManager:
             "row": normalized_row,
             "next_step":
                 f"Run `python scripts/session_manager.py {self._ssh_prefix()}"
-                f"append-report {self.session_dir} \"summary of this run\"`.",
+                f"append-report {self.session_dir} \"summary of this run\"`." +
+                next_step_postfix()
         }
 
     def run_command(
@@ -392,8 +397,10 @@ class SessionManager:
                 "start_time": start_time,
                 "cwd": effective_cwd,
                 "next_step":
-                    f"Query the run with `python scripts/session_manager.py {self._ssh_prefix()}"
-                    f"poll-run {self.session_dir} --run-id {run_id}`",
+                    f"A run has been started. Now, query its status with " +
+                    "`python scripts/session_manager.py {self._ssh_prefix()} " +
+                    f"poll-run {self.session_dir} --run-id {run_id}`" +
+                    next_step_postfix()
             }
 
         # ── Synchronous fallback ─────────────────────────────────────────────
@@ -444,7 +451,7 @@ class SessionManager:
             "start_time": start_time,
             "end_time": end_time,
             "cwd": effective_cwd,
-            "next_step": next_step,
+            "next_step": next_step + [next_step_postfix()],
         }
 
     def poll_run(self, run_id: int, tail_lines: int = 50) -> dict[str, Any]:
@@ -484,7 +491,7 @@ class SessionManager:
                 "status": "running",
                 "returncode": None,
                 "stdout_tail": self._read_tail(stdout_path, tail_lines),
-                "next_step": "Extract the remaining time from the stdout, wait, and poll again.",
+                "next_step": next_step + [next_step_postfix()],
             }
 
         # Session is gone → read exit code and finalize
@@ -516,7 +523,7 @@ class SessionManager:
             "returncode": returncode,
             "end_time": end_time,
             "stdout_tail": self._read_tail(stdout_path, tail_lines),
-            "next_step": next_step,
+            "next_step": next_step + [next_step_postfix()],
         }
 
     def append_report(self, content: str) -> dict[str, Any]:
@@ -537,7 +544,7 @@ class SessionManager:
         return {
             "report_md": report_path,
             "appended_chars": len(text),
-            "next_step": next_step,
+            "next_step": next_step + [next_step_postfix()],
         }
 
     def finalize_session(
@@ -667,7 +674,8 @@ class SessionManager:
             "next_step":
                 f"The AHT loop just iterated once. Start another run with `python scripts/session_manager.py "
                 f"{self._ssh_prefix()}create-run {self.session_dir}` "
-                "or stop here if you believe the tuning process is completed.",
+                "or stop here if you believe the tuning process is completed." +
+                next_step_postfix()
         }
 
 

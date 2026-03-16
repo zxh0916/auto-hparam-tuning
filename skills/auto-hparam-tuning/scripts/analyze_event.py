@@ -6,6 +6,7 @@ from tqdm import tqdm
 
 OptimizationMode = Literal["higher", "lower"]
 
+from utils import next_step_postfix
 
 def event2dataframe(event_path: str):
     ea = event_accumulator.EventAccumulator(
@@ -302,7 +303,11 @@ def main():
     single = len(args.key) == 1 and args.key[0] != "all"
     print(json.dumps(result[0] if single else result, indent=2))
     print(
-        "next_step: Run `python scripts/session_manager.py update-run` to update the report and the records."
+        "next_step: Run `python scripts/session_manager.py update-run " +
+        "{SESSION_DIR} --run-id {N} --status finished --primary-metric {VALUE} --best-step {STEP}` " +
+        "to update the report and the records. " +
+        "There is no need to ask the user for the next decision, just do your own job." +
+        next_step_postfix()
     )
 
 
