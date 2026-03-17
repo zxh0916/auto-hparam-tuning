@@ -23,8 +23,9 @@ from utils import (
     safe_float,
     now_iso,
     upsert_results_row,
-    next_step_postfix,
+    system_prompt,
     get_sessions_spawn_command,
+    get_cron_add_command
 )
 from analyze_event import summarize_scalar_curve, event2dataframe
 
@@ -72,7 +73,8 @@ class SessionManager:
         self.session_info = {
             "session_dir": self.session_dir,
             "local_python_executable": sys.executable,
-            "storage": "ssh" if self.ssh_host else "local"
+            "storage": "ssh" if self.ssh_host else "local",
+            "system_prompt": system_prompt()
         }
         if self.ssh_host:
             self.session_info["ssh_host"] = self.ssh_host
@@ -170,8 +172,7 @@ class SessionManager:
                 "Run `python scripts/session_manager.py " +
                 (f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "") +
                 f"append-report {session_dir} \"your understandings to the task\"` " +
-                "to write down your understandings to the task." +
-                next_step_postfix()
+                "to write down your understandings to the task."
         }
         return mgr, result
 
@@ -238,11 +239,10 @@ class SessionManager:
             "metrics_path": _join(run_dir, "metrics.json"),
             "summary_path": _join(run_dir, "summary.md"),
             "copied_dir": copied_dir,
-            "next_step": [
-                self.generate_tuning_strategy() if next_id == 0 else "",
-                f"Run created. Now, spawn a subagent to tune and run by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}`",
-                next_step_postfix()
-            ]
+            "next_step": (
+                self.generate_tuning_strategy() if next_id == 0 else "" +
+                f"Run created. Now, spawn a subagent to tune and run by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}`"
+            )
         }
     
     def generate_tuning_strategy(self):
@@ -306,12 +306,12 @@ class SessionManager:
             "report_path": self.report_path,
             "strategy_path": self.strategy_path,
             "summarized_results": summary,
-            "next_step": [
-                f"Spawn a subagent to decide the next hyperparameter override: {spawn_cmd}",
-                "After spawning, DO NOTHING until the subagent returns.",
-                f"After the subagent returns, poll the run with: "
-                f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
-            ],
+            "next_step": (
+                f"Spawn a subagent to decide the next hyperparameter override: {spawn_cmd}" +
+                "After spawning, DO NOTHING until the subagent returns." +
+                f"After the subagent returns, poll the run with: " +
+                f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`"
+            ),
         }
 
     def override_and_run(
@@ -395,6 +395,7 @@ class SessionManager:
             self.storage.write_text(_join(run_dir, "tmux_session.txt"), tmux_name)
 
             return {
+                **self.session_info,
                 "run_id": run_id,
                 "run_dir": run_dir,
                 "override_sync_warning": sync_warning,
@@ -406,8 +407,7 @@ class SessionManager:
                 "cwd": effective_cwd,
                 "next_step":
                     f"A run has been started. Now, return to the caller agent who called you and ask it to query the status with " +
-                    f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`" +
-                    next_step_postfix()
+                    f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`"
             }
 
         # ── Synchronous fallback ─────────────────────────────────────────────
@@ -460,7 +460,7 @@ class SessionManager:
             "start_time": start_time,
             "end_time": end_time,
             "cwd": effective_cwd,
-            "next_step": next_step + [next_step_postfix()],
+            "next_step": next_step,
         }
 
     def update_run_result(
@@ -501,8 +501,7 @@ class SessionManager:
             "row": normalized_row,
             "next_step":
                 f"Run `python scripts/session_manager.py {self._ssh_prefix()}"
-                f"append-report {self.session_dir} \"summary of this run\"`." +
-                next_step_postfix()
+                f"append-report {self.session_dir} \"summary of this run\"`."
         }
 
     def poll_run(self, run_id: int, tail_lines: int = 50) -> dict[str, Any]:
@@ -539,24 +538,14 @@ class SessionManager:
                 "The run is not completed yet. Please estimate the remaining time from stdout_tail, " +
                 f"formalize the remaining time using `{self.eta_cmd}`, " +
                 "then call `cron.add` tool in openclaw with following parameters to remind yourself when it completes:\n" +
-                json.dumps({
-                    "name": "AHT poll",
-                    "schedule": {
-                        "kind": "at",
-                        "at": f"<result of `{self.eta_cmd} <remaining time>`>"
-                    },
-                    "sessionTarget": "current",
-                    "wakeMode": "now",
-                    "payload": {
-                        "kind": "systemEvent",
-                        "text":
-                            "According to the remaining time estimation, one AHT run should have finished. " +
-                            f"Query the run with `{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
-                    },
-                    "deleteAfterRun": "true"
-                }, ensure_ascii=False, indent=2) +
-                "\n Note: DO NOT USE SLEEP comamnd to wait. You MUST use `cron.add`." +
-                next_step_postfix()
+                get_cron_add_command(
+                    name=f"aht_poll_run{run_id}",
+                    at="<result of eta.py>",
+                    payload=
+                        "According to the remaining time estimation, one AHT run should have finished. " +
+                        f"Query the run with `{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
+                ) +
+                "\n Note: DO NOT USE SLEEP comamnd to wait. You MUST use `cron.add`."
             ]
             return {
                 **self.session_info,
@@ -566,7 +555,7 @@ class SessionManager:
                 "status": "running",
                 "returncode": None,
                 "stdout_tail": self._read_tail(stdout_path, tail_lines),
-                "next_step": next_step + [next_step_postfix()],
+                "next_step": next_step,
             }
 
         # Session is gone → read exit code and finalize
@@ -599,7 +588,7 @@ class SessionManager:
             "returncode": returncode,
             "end_time": end_time,
             "stdout_tail": self._read_tail(stdout_path, tail_lines),
-            "next_step": next_step + next_step_postfix(),
+            "next_step": next_step,
         }
     
     def analyze_event(
@@ -675,7 +664,7 @@ class SessionManager:
             **self.session_info,
             "report_md": report_path,
             "appended_chars": len(text),
-            "next_step": next_step + [next_step_postfix()],
+            "next_step": next_step,
         }
 
     def finalize_session(
@@ -806,8 +795,7 @@ class SessionManager:
                 f"The AHT loop just iterated once. Start another run with `{self.python_cmd} create-run {self.session_dir}` "
                 "or stop here if you believe the tuning process is completed." +
                 "Check trend_hint: Stop if \"flat\" or \"degrading\" for 3+ consecutive runs,  budget exhausted, or objective already met." +
-                "Otherwise go back to start another run." +
-                next_step_postfix()
+                "Otherwise go back to start another run."
         }
 
 

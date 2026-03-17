@@ -5,7 +5,7 @@ import shlex
 import subprocess
 from dataclasses import dataclass
 from pathlib import PurePosixPath, Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 import csv
 from datetime import datetime
 from io import StringIO
@@ -260,6 +260,24 @@ def get_sessions_spawn_command(label: str, task: str):
     command = command + ")"
     return command
 
+def get_cron_add_command(name: str, at: str, payload: str):
+    args = {
+        "name": name,
+        "at": at,
+        "session": "main",
+        "session-key": "use \"session_status\" tool to acquire",
+        "wake": "now",
+        "system-event": payload
+    }
+    command = "`openclaw cron add "
+    for k, v in args.items():
+        if k in ["name", "at", "system-event"] :
+            command = command + f" --{k} \"{v}\""
+        else:
+            command = command + f" --{k} {v}"
+    command = command + " --delete-after-run`"
+    return command
+
 
 def ensure_override_in_defaults(storage: Storage, primary_config_path: str) -> bool:
     """Ensure ``- override`` appears in the ``defaults`` list after ``- _self_``.
@@ -421,10 +439,10 @@ def safe_float(value: Any) -> float | None:
     except ValueError:
         return None
 
-def next_step_postfix() -> str:
+def system_prompt() -> str:
     return (
-        " Please follow the instructions in `next_step` strictly, " +
-        "spawn subagent using `sessions_spawn` and set cron job using `cron.add` when mentioned. " +
+        "Please follow the instructions in `next_step` strictly, " +
+        "spawn subagent using `sessions_spawn` and set cron job using `openclaw cron add` when mentioned. " +
         "There is no need to ask the user for the next decision. Just follow the instruction in \"next_step\" " +
         "and continue the tuning process until there's an error. " +
         "If there's no error, please strictly follow the instructions in \"next_step\". " +
