@@ -241,7 +241,8 @@ class SessionManager:
             "copied_dir": copied_dir,
             "next_step": (
                 self.generate_tuning_strategy() if next_id == 0 else "" +
-                f"Run created. Now, spawn a subagent to tune and run by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}`"
+                f"Run created. Now, start tuning by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}`" +
+                "and spawn a subagent following the instruction."
             )
         }
     
