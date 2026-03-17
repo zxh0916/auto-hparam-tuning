@@ -65,6 +65,7 @@ def _json_safe_default(obj: Any) -> Any:
 class SessionManager:
     def __init__(self, session_dir: str, ssh_host: Optional[str] = None) -> None:
         self.session_dir = session_dir
+        self.project_dir = Path(self.session_dir).parent.parent.parent.resolve().as_posix()
         self.ssh_host = ssh_host
         self.storage: Storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
         self.session_info = {
@@ -78,7 +79,7 @@ class SessionManager:
         self.script_path = Path(__file__).resolve()
         self.python_cmd = f"python {self.script_path.as_posix()} {self._ssh_prefix()}"
         self.eta_cmd = f"python {self.script_path.parent.joinpath("eta.py").as_posix()}"
-        self.hparam_md_path = Path(self.session_dir).parent.parent.parent.joinpath("HPARAM.md").as_posix()
+        self.hparam_md_path = _join(self.project_dir, "HPARAM.md")
         assert self.storage.exists(self.hparam_md_path)
         assert self.storage.exists(_join(self.session_dir, "meta.yaml"))
         self.meta_cfg = OmegaConf.create(self.storage.read_text(_join(self.session_dir, "meta.yaml")))
@@ -93,28 +94,28 @@ class SessionManager:
     def create(
         cls,
         project_root: str,
-        base_command: Optional[str] = None,
-        primary_metric: Optional[str] = None,
-        goal: Optional[str] = None,
+        base_command: str,
+        primary_metric: str,
+        primary_config_path: str,
+        goal: str,
         agent: str = "openclaw",
         skill: str = "auto-hparam-tuning",
         notes: Optional[str] = None,
         ssh_host: Optional[str] = None,
         timestamp: Optional[str] = None,
-        primary_config_path: Optional[str] = None,
     ) -> tuple["SessionManager", dict[str, Any]]:
         """Create a new AHT session directory and return a ``(SessionManager, result)`` pair."""
         storage = _default_storage(TargetSpec(project_root=project_root, ssh_host=ssh_host))
         
         if not primary_config_path.startswith("/"):
             primary_config_path = _join(project_root, primary_config_path)
-
+        assert storage.exists(primary_config_path), f"primary_config_path not exist: {primary_config_path}"
         override_yaml_path: Optional[str] = None
-        config_modified = False
-        if primary_config_path is not None:
-            parent = primary_config_path.rsplit("/", 1)[0] if "/" in primary_config_path else "."
-            override_yaml_path = parent + "/override.yaml"
-            config_modified = ensure_override_in_defaults(storage, primary_config_path)
+        parent = primary_config_path.rsplit("/", 1)[0] if "/" in primary_config_path else "."
+        override_yaml_path = parent + "/override.yaml"
+        ensure_override_in_defaults(storage, primary_config_path)
+        storage.write_text(override_yaml_path, "")
+        assert storage.exists(override_yaml_path), f"override_yaml_path not exist: {override_yaml_path}"
 
         now = datetime.now().astimezone() if timestamp is None else datetime.fromisoformat(timestamp)
         date_str = now.strftime("%Y-%m-%d")
@@ -129,9 +130,9 @@ class SessionManager:
             "# AHT Report\n\n## Session Summary\n"
             f"- Project: `{project_root}`\n"
             f"- Created at: `{now.isoformat(timespec='seconds')}`\n"
-            f"- Base command: `{base_command or ''}`\n"
-            f"- Primary metric: `{primary_metric or ''}`\n"
-            f"- Goal: `{goal or ''}`\n\n",
+            f"- Base command: `{base_command}`\n"
+            f"- Primary metric: `{primary_metric}`\n"
+            f"- Goal: `{goal}`\n\n",
         )
         meta = {
             "project_root": project_root,
@@ -163,7 +164,6 @@ class SessionManager:
             "ssh_host": ssh_host,
             "primary_config_path": primary_config_path,
             "override_yaml_path": override_yaml_path,
-            "primary_config_defaults_modified": config_modified,
             "next_step":
                 "Run `python scripts/session_manager.py " +
                 (f"--ssh-host \"{ssh_host}\" " if ssh_host is not None else "") +
@@ -934,13 +934,13 @@ def main() -> None:
             project_root=args.project_root,
             base_command=args.base_command,
             primary_metric=args.primary_metric,
+            primary_config_path=args.primary_config_path,
             goal=args.goal,
             agent=args.agent,
             skill=args.skill,
             notes=args.notes,
             ssh_host=args.ssh_host,
             timestamp=args.timestamp,
-            primary_config_path=args.primary_config_path,
         )
     else:
         mgr = SessionManager(session_dir=args.session_dir, ssh_host=args.ssh_host)

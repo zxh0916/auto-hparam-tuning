@@ -74,7 +74,7 @@ resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remo
           output paths, metric candidates, tuning knobs
 
 ### 3. CREATE SESSION:
-    a. See `{PROJECT_DIR}/HPARAM.md` to find the PRIMARY_CONFIG_PATH.
+    a. See `{PROJECT_DIR}/HPARAM.md` to find the PRIMARY_CONFIG_PATH, whether absolute path or relative to the project root.
     b. {SM} create-session {PROJECT_DIR} \
         --base-command "{BASE_COMMAND}" \
         --primary-metric {METRIC} \
