@@ -18,6 +18,8 @@ This skill will automatically the hyperparameters managed by hydra config system
 
 ## Workflow
 
+**IMPORTANT**: Always use provided scripts in scripts/, DO NOT run commands manually.
+
 0. Run the `aht-init` sub-skill first.
    - Collect and normalize the minimum required inputs: project path, conda env, reference training launch script/method, and optimization target.
    - Reuse anything already provided in the current conversation/context as provisional values.
@@ -46,35 +48,21 @@ This skill will automatically the hyperparameters managed by hydra config system
     6. Formalize the suggestion into a `override.yaml`, upload into the remote directory that contains the main config file, then back to 1. to launch another run.
 
 
-## 1. Understand the Project and Create the Session
+## Understand the Project and Create the Session
 
 Before tuning the hparam of the project, you should always make sure that the `aht-init` step has already produced and the user has explicitly confirmed these four fields: project path, conda env name, reference training launch method/script, and optimization target.
-
-Then make sure that you know the project enough by:
-
-1. Understand the whole project:
-
-    1. `python scripts/project_understanding.py inspect-project <path to project root>` for local project or 
-
-    2. `python scripts/project_understanding.py inspect-project --ssh-host user@remotehost <path to project root>` for project on remote machine.
-
-2. Understand the task to be tuned: `python scripts/project_understanding.py prepare-run-understanding <path to project root> <command to be tuned>`.
-
-3. Create the Session: `python scripts/session_manager.py create-session <path to project root> --ssh-host user@remotehost --base-command <command> --primary-metric <primary metric> --goal <goal>`.
-
-4. Write the Session Understanding into the report: `python scripts/session_manager.py --ssh-host user@remotehost <path to project root> append-report <your understanding>`.
-
 
 ## Pipeline Algorithm
 
 resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
+resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost]
 
 ### 1. UNDERSTAND PROJECT:
     a. python {SKILL_DIR}/scripts/project_understanding.py[ --ssh-host user@remotehost] inspect-project {PROJECT_DIR}
         → tells you which docs exist, what needs to be generated, and which prompts to use
-    b. Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing in `aht/`
+    b. Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing
         → creates `{PROJECT_DIR}/PROJECT.md` (general project onboarding guide)
-    c. Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing in `aht/`
+    c. Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing
         → creates `{PROJECT_DIR}/HPARAM.md` (Hydra config and hparam guide)
 
 ### 2. UNDERSTAND RUN COMMAND:
@@ -86,95 +74,70 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
           output paths, metric candidates, tuning knobs
 
 ### 3. CREATE SESSION:
-    a. python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-        create-session {PROJECT_DIR} \
+    a. See `{PROJECT_DIR}/HPARAM.md` to find the PRIMARY_CONFIG_PATH.
+    b. {SM} create-session {PROJECT_DIR} \
         --base-command "{BASE_COMMAND}" \
         --primary-metric {METRIC} \
         --goal {GOAL} \
         --primary-config-path {PRIMARY_CONFIG_PATH}
         → creates {SESSION_DIR} = {PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/
         → auto-inserts `- override` into the primary config's defaults list
-    b. python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-        append-report {SESSION_DIR} "your understanding to the task"
-        → appends in {SESSION_DIR}/report.md
+        → next_step tells you to call append-report
+    c. {SM} append-report {SESSION_DIR} "your understanding to the task"
+        → writes task understanding into {SESSION_DIR}/report.md
+        → next_step tells you to call create-run
 
-### 4. MICRO-BASELINE RUN:
+### 4. TUNING LOOP (baseline run 0 + up to BUDGET tuning iterations):
+
+    The main agent drives the outer loop with three commands per iteration.
+    Subagents handle tuning decisions and post-run analysis autonomously.
+    The main agent MUST BLOCK after each spawn and do nothing until the
+    subagent returns.
+
     a. CREATE RUN:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            create-run {SESSION_DIR}
-        → creates {SESSION_DIR}/runs/0/ with override.yaml, command.sh, stdout.log, etc.
-    b. WRITE OVERRIDE (empty for baseline):
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            write-override {SESSION_DIR} --run-id 0 --yaml ""
-        → writes empty override.yaml into runs/0/ AND syncs to the primary config's sibling override.yaml
-    c. EXECUTE:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            run-command {SESSION_DIR} --run-id 0 \
-            --command-str "{BASE_COMMAND}" \
-            [--conda-env {CONDA_ENV}] [--cwd {PROJECT_DIR}]
-        → launches command in a detached tmux session; returns immediately with status "running"
-    d. POLL until finished:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            poll-run {SESSION_DIR} --run-id 0 [--tail 50]
-        → returns status "running" (with stdout tail) or "finished"/"failed" (updates results.csv)
-        → when still running: read stdout_tail to estimate remaining time, wait, then poll again
-    e. (remote only) Once finished, copy back the event file and the hydra resolved config:
-        scp user@remotehost:{EVENT_FILE} /tmp/run0_events
-        scp user@remotehost:{HYDRA_OUTPUT_DIR}/.hydra/config.yaml /tmp/run0_config.yaml
-    f. ANALYZE event file to confirm metric keys and establish baseline:
-        python {SKILL_DIR}/scripts/analyze_event.py list-keys /tmp/run0_events
-        python {SKILL_DIR}/scripts/analyze_event.py summarize /tmp/run0_events {KEY1} [{KEY2} ...]
-    g. RECORD baseline metrics:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            update-run {SESSION_DIR} --run-id 0 \
-            --status finished --primary-metric {VALUE} --best-step {STEP}
-    PLAN STRATEGY:
-        Follow {SKILL_DIR}/prompts/plan_tuning_strategy.md to create `{SESSION_DIR}/strategy.md`
+        {SM} create-run {SESSION_DIR}
+        → creates {SESSION_DIR}/runs/{N}/ scaffold files
+        → if N == 0 (first run): automatically spawns a subagent to generate
+          strategy.md by following {SKILL_DIR}/prompts/plan_tuning_strategy.md.
+          BLOCK until that subagent returns before proceeding.
+        → next_step tells you to call `tune`
 
-### 5. TUNING LOOP (up to BUDGET iterations):
-    a. CREATE RUN:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            create-run {SESSION_DIR}
-        → returns run_id N and paths for the new run directory
-    b. TUNE & WRITE OVERRIDE:
-        Review strategy.md. Decide hparam changes, then write them:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            write-override {SESSION_DIR} --run-id {N} \
-            --override param0=value0 --override moduleA.param1=value1
-        (or use --yaml "raw: yaml" for structured overrides)
-        → writes override.yaml into runs/{N}/ AND syncs to the primary config's sibling override.yaml
-    c. EXECUTE:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            run-command {SESSION_DIR} --run-id {N} \
-            --command-str "{BASE_COMMAND}" \
-            [--conda-env {CONDA_ENV}] [--cwd {PROJECT_DIR}]
-        → launches in detached tmux; returns immediately with status "running"
-    d. POLL until finished:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            poll-run {SESSION_DIR} --run-id {N} [--tail 50]
-        → when still running: read stdout_tail to estimate remaining time, wait, then poll again
-        → when done: results.csv is updated automatically
-    e. COPYBACK: (remote only) copy event file and hydra config back to local /tmp
-    f. ANALYZE:
-        python {SKILL_DIR}/scripts/analyze_event.py list-keys /tmp/run{N}_events
-        python {SKILL_DIR}/scripts/analyze_event.py summarize /tmp/run{N}_events {KEY1} [{KEY2} ...]
-        → extract curve statistics (final value, best step, convergence pattern)
-    g. RECORD:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            update-run {SESSION_DIR} --run-id {N} \
-            --status finished --primary-metric {VALUE} --best-step {STEP}
-    h. LOG:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            append-report {SESSION_DIR} "## Run {N}\n\nOverride: ...\nResult: ...\nTakeaway: ..."
-    i. CHECK:
-        python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-            summarize-results {SESSION_DIR} [--top-k 3] [--recent-k 5]
-        → inspect trend_hint: "improving" / "flat" / "degrading" / "mixed"
-    j. TERMINATE?:    Stop if trend_hint is flat/degrading × 3, budget exhausted, or objective met
+    b. SPAWN TUNING SUBAGENT:
+        {SM} tune {SESSION_DIR} --run-id {N}
+        → embeds HPARAM.md, results summary, report, and strategy as context
+        → spawns a subagent that:
+            1. Reads the context and decides the best override for run {N}
+            2. Calls `{SM} run {SESSION_DIR} --run-id {N} \
+                   --command-str "{BASE_COMMAND}" [--conda-env {CONDA_ENV}] \
+                   --override key=value [--override key2=value2 ...]`
+               which writes override.yaml AND launches the command in a detached tmux session
+            3. Returns the chosen override and reasoning to the main agent
+        → BLOCK until the subagent returns.
+        → next_step tells you to call poll-run
 
-### 6. FINALIZE:
-    python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost] \
-        finalize-session {SESSION_DIR} completed [--notes "summary"]
+    c. POLL until finished:
+        {SM} poll-run {SESSION_DIR} --run-id {N} [--tail 50]
+        → if still running: next_step tells you to estimate remaining time via
+          eta.py, then add a cron reminder via `cron.add` and STOP.
+          Wait for the cron to wake you; then poll again.
+        → if finished: results.csv is updated automatically, then spawns a subagent
+          that:
+            1. Locates the TensorBoard event file (path recorded in HPARAM.md)
+            2. (remote only) Copies it back with scp
+            3. Calls `{SM} analyze-event {SESSION_DIR} --run-id {N} \
+                   --event-path /path/to/event`
+               which writes {SESSION_DIR}/runs/{N}/event_analysis.json
+            4. Reads the analysis and the current report
+            5. Calls `{SM} append-report {SESSION_DIR} "## Run {N} ..."` to log results
+          BLOCK until that subagent returns.
+
+    d. COPYBACK and ANALYZE:
+        copy back the event file if using ssh remote machine
+        {SM} analyze-event {EVENT_FILE_PATH}
+        BLOCK until that subagent returns.
+
+### 5. FINALIZE:
+    {SM} finalize-session {SESSION_DIR} completed [--notes "summary"]
     → present final report and best config to user
 
 ## Capability: experiment-history visualization/reporting

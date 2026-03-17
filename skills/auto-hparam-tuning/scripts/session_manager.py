@@ -7,7 +7,7 @@ import shlex
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 
 from omegaconf import OmegaConf
 
@@ -22,8 +22,10 @@ from utils import (
     safe_float,
     now_iso,
     upsert_results_row,
-    next_step_postfix
+    next_step_postfix,
+    get_sessions_spawn_command,
 )
+from analyze_event import summarize_scalar_curve, event2dataframe
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
 RunStatus = Literal["created", "running", "finished", "failed", "killed", "inconclusive"]
@@ -65,6 +67,21 @@ class SessionManager:
         self.session_dir = session_dir
         self.ssh_host = ssh_host
         self.storage: Storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
+        self.session_info = {
+            "session_dir": self.session_dir,
+            "storage": "ssh" if self.ssh_host else "local"
+        }
+        if self.ssh_host:
+            self.session_info["ssh_host"] = self.ssh_host
+        self.strategy_path = _join(self.session_dir, "strategy.md")
+        self.report_path = _join(session_dir, "report.md")
+        self.script_path = Path(__file__).resolve()
+        self.python_cmd = f"python {self.script_path.as_posix()} {self._ssh_prefix()}"
+        self.eta_cmd = f"python {self.script_path.parent.joinpath("eta.py").as_posix()}"
+        self.hparam_md_path = Path(self.session_dir).parent.parent.parent.joinpath("HPARAM.md").as_posix()
+        assert self.storage.exists(self.hparam_md_path)
+        assert self.storage.exists(_join(self.session_dir, "meta.yaml"))
+        self.meta_cfg = OmegaConf.create(self.storage.read_text(_join(self.session_dir, "meta.yaml")))
 
     @property
     def results_path(self) -> str:
@@ -88,6 +105,9 @@ class SessionManager:
     ) -> tuple["SessionManager", dict[str, Any]]:
         """Create a new AHT session directory and return a ``(SessionManager, result)`` pair."""
         storage = _default_storage(TargetSpec(project_root=project_root, ssh_host=ssh_host))
+        
+        if not primary_config_path.startswith("/"):
+            primary_config_path = _join(project_root, primary_config_path)
 
         override_yaml_path: Optional[str] = None
         config_modified = False
@@ -104,7 +124,6 @@ class SessionManager:
 
         storage.mkdir(runs_dir)
         storage.write_text(_join(session_dir, "results.csv"), ",".join(RESULTS_COLUMNS) + "\n")
-        storage.write_text(_join(session_dir, "strategy.md"), "")
         storage.write_text(
             _join(session_dir, "report.md"),
             "# AHT Report\n\n## Session Summary\n"
@@ -134,8 +153,8 @@ class SessionManager:
 
         mgr = cls(session_dir, ssh_host)
         result = {
+            **mgr.session_info,
             "project_root": project_root,
-            "session_dir": session_dir,
             "runs_dir": runs_dir,
             "results_csv": mgr.results_path,
             "report_md": _join(session_dir, "report.md"),
@@ -207,6 +226,7 @@ class SessionManager:
             notes=notes,
         )
         return {
+            **self.session_info,
             "run_id": next_id,
             "run_dir": run_dir,
             "override_path": _join(run_dir, "override.yaml"),
@@ -216,123 +236,86 @@ class SessionManager:
             "metrics_path": _join(run_dir, "metrics.json"),
             "summary_path": _join(run_dir, "summary.md"),
             "copied_dir": copied_dir,
-            "next_step":
-                f"Read and follow the instructions in {Path(__file__).parent.parent / 'prompts' / 'plan_tuning_strategy.md'}. "
-                f"Then specify a hparam combination with `python scripts/session_manager.py {self._ssh_prefix()}"
-                f"write-override {self.session_dir} --run-id {next_id} "
-                "--override param0=value0 --override moduleA.param1=value1`" +
+            "next_step": [
+                self.generate_tuning_strategy() if next_id == 0 else "",
+                f"Run created. Now, spawn a subagent to tune and run by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}`",
                 next_step_postfix()
+            ]
         }
+    
+    def generate_tuning_strategy(self):
+        self.storage.write_text(self.strategy_path, "")
+        skill_dir = Path(__file__).resolve().parent.parent
+        next_step = [
+            "Spawn a subagent to walk through the project with following command: " + 
+            get_sessions_spawn_command(
+                label="tuning_strategy_generation",
+                task=(
+                    f"Read and follow the instruction in {str(skill_dir / "prompts" / "plan_tuning_strategy.md")} "+
+                    f"and write your summary in {self.strategy_path} "+
+                    (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
+                )
+            ) + 
+            "After spawned, wait until the subagent returns. Then, follow the following instructions."
+        ]
+        
+        return "\n".join(next_step)
+    
+    def tune(self, run_id: int) -> dict[str, Any]:
+        """Spawn a subagent to decide the next hyperparameter override for *run_id*.
 
-    def write_override(
-        self,
-        run_id: int,
-        overrides: Optional[list[str]] = None,
-        yaml_content: Optional[str] = None,
-    ) -> dict[str, Any]:
-        """Write Hydra overrides to ``<run_dir>/override.yaml``.
-
-        Accepts either a list of dotted-path ``key=value`` strings (Hydra CLI style)
-        or a raw YAML string.  Exactly one of *overrides* or *yaml_content* must be
-        provided.
+        Reads ``report.md``, ``strategy.md``, and the live results summary, then
+        uses ``get_sessions_spawn_command`` to build a spawn instruction.  The
+        subagent will call ``write-override`` autonomously; the caller should block
+        until it returns before launching the run.
         """
-        if (overrides is None) == (yaml_content is None):
-            raise SessionManagerError("Exactly one of 'overrides' or 'yaml_content' must be provided.")
+        summary = self.summarize_results()
 
-        if overrides is not None:
-            cfg = OmegaConf.from_dotlist(overrides)
-            text = OmegaConf.to_yaml(cfg)
-        else:
-            text = yaml_content if yaml_content.endswith("\n") else yaml_content + "\n"
+        task = (
+            f"You are a hyperparameter tuning expert assisting an ongoing AHT session{(' on remote machine '+self.ssh_host) if self.ssh_host is not None else ''}.\n\n"
+            f"## Context\n\n"
+            f"### Session directory\n{self.session_dir}\n\n"
+            f"### Hyperparameter structure document\n{self.hparam_md_path}\n\n"
+            f"### Results summary\n```json\n{json.dumps(summary, indent=2, default=_json_safe_default)}\n```\n\n"
+            f"### Session report path\n{self.report_path}\n\n"
+            f"## Your task\n\n"
+            f"1. Carefully review the results summary, tuning strategy, and the run history in the report above.\n"
+            f"2. Decide the best hyperparameter override to try next for the current run {run_id}, "
+            f"following the guidance in `{self.strategy_path}`.\n"
+            f"3. Start a run by running:\n"
+            f"   ```bash\n"
+            f"   {self.python_cmd} run {self.session_dir} --run-id {run_id} "
+            f"--command-str \"specified_command\" --conda-env \"specified_conda_env\""
+            f"--override key=value [--override key2=value2 ...]\n"
+            f"   ```\n"
+            f"4. Report what override you chose and the reasoning behind it.\n"
+        )
 
-        run_dir = _join(self.session_dir, "runs", str(run_id))
-        override_path = _join(run_dir, "override.yaml")
-        self.storage.write_text(override_path, text)
-
-        # Sync to the override.yaml that lives next to the primary Hydra config.
-        meta_path = _join(self.session_dir, "meta.yaml")
-        override_yaml_path: Optional[str] = None
-        sync_warning: Optional[str] = None
-        try:
-            if not self.storage.exists(meta_path):
-                sync_warning = f"meta.yaml not found at {meta_path}; skipping config-dir sync."
-            else:
-                try:
-                    meta_cfg = OmegaConf.create(self.storage.read_text(meta_path))
-                except Exception as exc:
-                    sync_warning = f"Failed to parse meta.yaml: {exc}; skipping config-dir sync."
-                    meta_cfg = None
-                if meta_cfg is not None:
-                    override_yaml_path = meta_cfg.get("override_yaml_path") or None
-                    if not override_yaml_path:
-                        sync_warning = "meta.yaml has no override_yaml_path (was create-session called with --primary-config-path?)."
-                    else:
-                        try:
-                            self.storage.write_text(override_yaml_path, text)
-                        except Exception as exc:
-                            sync_warning = f"Wrote run override but failed to sync to {override_yaml_path}: {exc}"
-                            override_yaml_path = None
-        except Exception as exc:
-            sync_warning = f"Unexpected error during config-dir sync: {exc}"
+        spawn_cmd = get_sessions_spawn_command(
+            label=f"aht_tune_run{run_id}",
+            task=task,
+        )
 
         return {
+            **self.session_info,
+            "session_dir": self.session_dir,
             "run_id": run_id,
-            "override_path": override_path,
-            "override_yaml_path": override_yaml_path,
-            "sync_warning": sync_warning,
-            "yaml_content": text,
-            "next_step":
-                f"Start a run with `python scripts/session_manager.py {self._ssh_prefix()}"
-                f"run-command {self.session_dir} --run-id {run_id} "
-                "--conda-env \"specified_conda_env\" --command-str \"specified_command\"`" +
-                next_step_postfix()
+            "report_path": self.report_path,
+            "strategy_path": self.strategy_path,
+            "summarized_results": summary,
+            "next_step": [
+                f"Spawn a subagent to decide the next hyperparameter override: {spawn_cmd}",
+                "After spawning, DO NOTHING until the subagent returns.",
+                f"After the subagent returns, poll the run with: "
+                f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
+            ],
         }
 
-    def update_run_result(
-        self,
-        run_id: int,
-        run_name: Optional[str] = None,
-        status: Optional[RunStatus] = None,
-        primary_metric: Any = None,
-        best_step: Any = None,
-        run_dir: Optional[str] = None,
-        override_path: Optional[str] = None,
-        config_path: Optional[str] = None,
-        metrics_path: Optional[str] = None,
-        summary_path: Optional[str] = None,
-        start_time: Optional[str] = None,
-        end_time: Optional[str] = None,
-        notes: Optional[str] = None,
-    ) -> dict[str, Any]:
-        row = {
-            "run_id": run_id,
-            "run_name": run_name or f"run-{run_id:04d}",
-            "status": status or "",
-            "primary_metric": primary_metric,
-            "best_step": best_step,
-            "run_dir": run_dir or f"runs/{run_id}",
-            "override_path": override_path or f"runs/{run_id}/override.yaml",
-            "config_path": config_path or f"runs/{run_id}/resolved_config.json",
-            "metrics_path": metrics_path or f"runs/{run_id}/metrics.json",
-            "summary_path": summary_path or f"runs/{run_id}/summary.md",
-            "start_time": start_time,
-            "end_time": end_time,
-            "notes": notes,
-        }
-        normalized_row = upsert_results_row(self.storage, self.results_path, RESULTS_COLUMNS, row)
-        return {
-            "results_csv": self.results_path,
-            "row": normalized_row,
-            "next_step":
-                f"Run `python scripts/session_manager.py {self._ssh_prefix()}"
-                f"append-report {self.session_dir} \"summary of this run\"`." +
-                next_step_postfix()
-        }
-
-    def run_command(
+    def override_and_run(
         self,
         run_id: int,
         command: str,
+        overrides: list[str] = [],
         conda_env: Optional[str] = None,
         cwd: Optional[str] = None,
         use_tmux: bool = True,
@@ -345,6 +328,27 @@ class SessionManager:
 
         When *use_tmux* is False, execution is synchronous (blocks until done).
         """
+        
+        cfg = OmegaConf.from_dotlist(overrides)
+        text = OmegaConf.to_yaml(cfg)
+
+        run_dir = _join(self.session_dir, "runs", str(run_id))
+        override_path = _join(run_dir, "override.yaml")
+        self.storage.write_text(override_path, text)
+
+        # Sync to the override.yaml that lives next to the primary Hydra config.
+        override_yaml_path: Optional[str] = None
+        sync_warning: Optional[str] = None
+        override_yaml_path = self.meta_cfg.get("override_yaml_path") or None
+        if not override_yaml_path:
+            sync_warning = "meta.yaml has no override_yaml_path (was create-session called with --primary-config-path?)."
+        else:
+            try:
+                self.storage.write_text(override_yaml_path, text)
+            except Exception as exc:
+                sync_warning = f"Wrote run override but failed to sync to {override_yaml_path}: {exc}"
+                override_yaml_path = None
+        
         run_dir = _join(self.session_dir, "runs", str(run_id))
         stdout_path = _join(run_dir, "stdout.log")
         stderr_path = _join(run_dir, "stderr.log")
@@ -390,6 +394,7 @@ class SessionManager:
             return {
                 "run_id": run_id,
                 "run_dir": run_dir,
+                "override_sync_warning": sync_warning,
                 "stdout_path": stdout_path,
                 "stderr_path": stderr_path,
                 "tmux_session": tmux_name,
@@ -397,9 +402,8 @@ class SessionManager:
                 "start_time": start_time,
                 "cwd": effective_cwd,
                 "next_step":
-                    f"A run has been started. Now, query its status with " +
-                    "`python scripts/session_manager.py {self._ssh_prefix()} " +
-                    f"poll-run {self.session_dir} --run-id {run_id}`" +
+                    f"A run has been started. Now, return to the caller agent who called you and ask it to query the status with " +
+                    f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`" +
                     next_step_postfix()
             }
 
@@ -442,8 +446,10 @@ class SessionManager:
             next_step.append("Run failed. Now try to figure out what's wrong according to the stdout.")
 
         return {
+            **self.session_info,
             "run_id": run_id,
             "run_dir": run_dir,
+            "override_sync_warning": sync_warning,
             "stdout_path": stdout_path,
             "stderr_path": stderr_path,
             "returncode": returncode,
@@ -452,6 +458,48 @@ class SessionManager:
             "end_time": end_time,
             "cwd": effective_cwd,
             "next_step": next_step + [next_step_postfix()],
+        }
+
+    def update_run_result(
+        self,
+        run_id: int,
+        run_name: Optional[str] = None,
+        status: Optional[RunStatus] = None,
+        primary_metric: Any = None,
+        best_step: Any = None,
+        run_dir: Optional[str] = None,
+        override_path: Optional[str] = None,
+        config_path: Optional[str] = None,
+        metrics_path: Optional[str] = None,
+        summary_path: Optional[str] = None,
+        start_time: Optional[str] = None,
+        end_time: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> dict[str, Any]:
+        row = {
+            "run_id": run_id,
+            "run_name": run_name or f"run-{run_id:04d}",
+            "status": status or "",
+            "primary_metric": primary_metric,
+            "best_step": best_step,
+            "run_dir": run_dir or f"runs/{run_id}",
+            "override_path": override_path or f"runs/{run_id}/override.yaml",
+            "config_path": config_path or f"runs/{run_id}/resolved_config.json",
+            "metrics_path": metrics_path or f"runs/{run_id}/metrics.json",
+            "summary_path": summary_path or f"runs/{run_id}/summary.md",
+            "start_time": start_time,
+            "end_time": end_time,
+            "notes": notes,
+        }
+        normalized_row = upsert_results_row(self.storage, self.results_path, RESULTS_COLUMNS, row)
+        return {
+            **self.session_info,
+            "results_csv": self.results_path,
+            "row": normalized_row,
+            "next_step":
+                f"Run `python scripts/session_manager.py {self._ssh_prefix()}"
+                f"append-report {self.session_dir} \"summary of this run\"`." +
+                next_step_postfix()
         }
 
     def poll_run(self, run_id: int, tail_lines: int = 50) -> dict[str, Any]:
@@ -469,7 +517,7 @@ class SessionManager:
         if not self.storage.exists(tmux_session_file):
             raise SessionManagerError(
                 f"No tmux_session.txt found for run {run_id}. "
-                "Was run-command called with tmux enabled?"
+                "Was `python scripts/session_manager.py run` called with tmux enabled?"
             )
 
         tmux_name = self.storage.read_text(tmux_session_file).strip()
@@ -486,28 +534,29 @@ class SessionManager:
         if check.returncode == 0:
             next_step = [
                 "The run is not completed yet. Please estimate the remaining time from stdout_tail, " +
-                "formalize the remaining time using `python scripts/eta.py`, " +
-                "then call `cron.add` with following parameters to remind yourself when it completes:\n" +
+                f"formalize the remaining time using `{self.eta_cmd}`, " +
+                "then call `cron.add` tool in openclaw with following parameters to remind yourself when it completes:\n" +
                 json.dumps({
                     "name": "AHT poll",
                     "schedule": {
                         "kind": "at",
-                        "at": "<result of `python scripts/eta.py <remaining time>`>"
+                        "at": f"<result of `{self.eta_cmd} <remaining time>`>"
                     },
-                    "sessionTarget": "main",
+                    "sessionTarget": "current",
                     "wakeMode": "now",
                     "payload": {
                         "kind": "systemEvent",
-                        "text": 
+                        "text":
                             "According to the remaining time estimation, one AHT run should have finished. " +
-                            f"Query the run with `python scripts/session_manager.py {self._ssh_prefix()}"
-                            f"poll-run {self.session_dir} --run-id {run_id}`",
+                            f"Query the run with `{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
                     },
                     "deleteAfterRun": "true"
                 }, ensure_ascii=False, indent=2) +
+                "\n Note: DO NOT USE SLEEP comamnd to wait. You MUST use `cron.add`." +
                 next_step_postfix()
             ]
             return {
+                **self.session_info,
                 "run_id": run_id,
                 "run_dir": run_dir,
                 "tmux_session": tmux_name,
@@ -529,16 +578,17 @@ class SessionManager:
         end_time = now_iso()
         self.update_run_result(run_id=run_id, status=status, end_time=end_time)
 
-        next_step: list[str] = []
         if status == "finished":
-            if self.ssh_host is not None:
-                next_step.append("Copy the event file and the full config file back to local disk.")
-            next_step.append("Run `python scripts/analyze_event.py list-keys /path/to/the/local/event/file` to list scalar keys.")
-            next_step.append("Then run `python scripts/analyze_event.py summarize /path/to/the/local/event/file key1 key2 keyn` to analyze the selected scalar events.")
+            next_step = (
+                "Run finished. Now:\n" +
+                (f"- Copy back the tensorboard event file to the `/tmp/run{run_id}_tensorboard_event` using scp.\n") if self.ssh_host is not None else "\n" +
+                f"- Then analyze the tensorboard events by `{self.python_cmd} analyze-event /path/to/event/file`."
+            )
         else:
-            next_step.append("Run failed. Now try to figure out what's wrong according to the stdout.")
+            next_step = "Run failed. Now try to figure out what's wrong according to the stdout."
 
         return {
+            **self.session_info,
             "run_id": run_id,
             "run_dir": run_dir,
             "tmux_session": tmux_name,
@@ -546,9 +596,63 @@ class SessionManager:
             "returncode": returncode,
             "end_time": end_time,
             "stdout_tail": self._read_tail(stdout_path, tail_lines),
-            "next_step": next_step + [next_step_postfix()],
+            "next_step": next_step + next_step_postfix(),
         }
-
+    
+    def analyze_event(
+        self,
+        run_id: int,
+        event_path: str,
+        smoothing: float = 0.0,
+        quantile_low: float = 0.05,
+        quantile_high: float = 0.95,
+    ) -> dict[str, Any]:
+        run_dir = _join(self.session_dir, "runs", str(run_id))
+        df = event2dataframe(event_path)
+        results = [
+            summarize_scalar_curve(
+                df=df,
+                key=k,
+                smoothing=smoothing,
+                quantile_low=quantile_low,
+                quantile_high=quantile_high,
+                mode=self.meta_cfg.get("goal", "maximize"),
+            )
+            for k in list(df.columns)
+        ]
+        output_path = _join(self.session_dir, "runs", str(run_id), "event_analysis.json")
+        self.storage.write_text(
+            output_path,
+            json.dumps(results, indent=2, default=_json_safe_default) + "\n",
+        )
+        task = (
+            f"You are a hyperparameter tuning expert assisting an ongoing AHT session{(' on remote machine '+self.ssh_host) if self.ssh_host is not None else ''}.\n\n"
+            f"Now a run has finished. Analyze the run and write a report.\n\n"
+            f"## Context\n\n"
+            f"### Session directory\n{self.session_dir}\n\n"
+            f"### Hyperparameter structure document\n{self.hparam_md_path}\n\n"
+            f"### Session report path\n{self.report_path}\n\n"
+            f"### Run directory\n{run_dir}\n\n"
+            f"### Override hyperparameters\n{_join(run_dir, "override.yaml")}\n\n"
+            f"## Your task\n\n"
+            f"- Find out where the tensorboard event file of the current run {run_id} is placed. "
+            f"It should be noted in the hyperparameter structure document.\n"
+            f"- Read the analysis in `event_analysis_path` and the report in `{self.report_path}`.\n"
+            f"- Then update the report by `{self.python_cmd} append-report \"content\"`."
+        )
+        spawn_cmd = get_sessions_spawn_command(
+            label=f"aht_analyze_run{run_id}",
+            task=task,
+        )
+        next_step = f"Run finished. Spawn a subagent to analyze the run and update the report by {spawn_cmd}."
+        return {
+            **self.session_info,
+            "run_id": run_id,
+            "event_path": event_path,
+            "event_analysis_path": output_path,
+            "next_step": next_step
+        }
+    
     def append_report(self, content: str) -> dict[str, Any]:
         report_path = _join(self.session_dir, "report.md")
         text = content if content.endswith("\n") else content + "\n"
@@ -556,15 +660,15 @@ class SessionManager:
         runs_dir = _join(self.session_dir, "runs")
         if len(self.storage.list_dir_names(runs_dir)) == 0:
             next_step = [
-                f"Now the session is initialized. Start the test run with `python scripts/session_manager.py "
-                f"{self._ssh_prefix()}create-run {self.session_dir}`"
+                f"Now the session is initialized. Start the test run with "
+                f"`{self.python_cmd} create-run {self.session_dir}`."
             ]
         else:
             next_step = [
-                f"Run `python scripts/session_manager.py {self._ssh_prefix()}"
-                f"summarize-results {self.session_dir}` to analyze the finished runs."
+                f"Run `{self.python_cmd} summarize-results {self.session_dir}` to analyze the finished runs."
             ]
         return {
+            **self.session_info,
             "report_md": report_path,
             "appended_chars": len(text),
             "next_step": next_step + [next_step_postfix()],
@@ -588,22 +692,21 @@ class SessionManager:
     def summarize_results(
         self,
         top_k: int = 3,
-        recent_k: int = 5,
-        goal: Optional[str] = None,
+        recent_k: int = 5
     ) -> dict[str, Any]:
         meta_path = _join(self.session_dir, "meta.yaml")
         df = load_results_dataframe(self.storage, self.results_path, RESULTS_COLUMNS)
 
-        inferred_goal = goal
         meta_text = self.storage.read_text(meta_path) if self.storage.exists(meta_path) else ""
-        if inferred_goal is None and meta_text:
+        if meta_text:
             meta_cfg = OmegaConf.create(meta_text)
-            inferred_goal = meta_cfg.get("goal") or None
-        if inferred_goal is None:
+            inferred_goal = meta_cfg.get("goal", "maximize")
+        else:
             inferred_goal = "maximize"
 
         if df.empty:
             return {
+                **self.session_info,
                 "session_dir": self.session_dir,
                 "results_csv": self.results_path,
                 "goal": inferred_goal,
@@ -679,6 +782,7 @@ class SessionManager:
                 trend_hint = "mixed"
 
         return {
+            **self.session_info,
             "session_dir": self.session_dir,
             "results_csv": self.results_path,
             "goal": inferred_goal,
@@ -695,9 +799,10 @@ class SessionManager:
             "recent_runs": recent_runs,
             "trend_hint": trend_hint,
             "next_step":
-                f"The AHT loop just iterated once. Start another run with `python scripts/session_manager.py "
-                f"{self._ssh_prefix()}create-run {self.session_dir}` "
+                f"The AHT loop just iterated once. Start another run with `{self.python_cmd} create-run {self.session_dir}` "
                 "or stop here if you believe the tuning process is completed." +
+                "Check trend_hint: Stop if \"flat\" or \"degrading\" for 3+ consecutive runs,  budget exhausted, or objective already met." +
+                "Otherwise go back to start another run." +
                 next_step_postfix()
         }
 
@@ -736,28 +841,6 @@ def parse_args() -> argparse.Namespace:
     p_run.add_argument("session_dir")
     p_run.add_argument("--notes", default=None)
 
-    p_update = subparsers.add_parser("update-run", help="Insert or update one run row in results.csv.")
-    p_update.add_argument("session_dir")
-    p_update.add_argument("--run-id", type=int)
-    p_update.add_argument("--run-name", default=None)
-    p_update.add_argument("--status", default=None)
-    p_update.add_argument("--primary-metric", default=None)
-    p_update.add_argument("--best-step", default=None)
-    p_update.add_argument("--run-dir", default=None)
-    p_update.add_argument("--override-path", default=None)
-    p_update.add_argument("--config-path", default=None)
-    p_update.add_argument("--metrics-path", default=None)
-    p_update.add_argument("--summary-path", default=None)
-    p_update.add_argument("--start-time", default=None)
-    p_update.add_argument("--end-time", default=None)
-    p_update.add_argument("--notes", default=None)
-
-    p_summarize = subparsers.add_parser("summarize-results", help="Summarize results.csv with pandas for agent decision-making.")
-    p_summarize.add_argument("session_dir")
-    p_summarize.add_argument("--top-k", type=int, default=3)
-    p_summarize.add_argument("--recent-k", type=int, default=5)
-    p_summarize.add_argument("--goal", default=None, help="Override optimization direction. Default: read from meta.yaml or assume maximize.")
-
     p_report = subparsers.add_parser("append-report", help="Append markdown content to report.md.")
     p_report.add_argument("session_dir")
     p_report.add_argument("content", help="Markdown text to append.")
@@ -769,7 +852,7 @@ def parse_args() -> argparse.Namespace:
     p_finalize.add_argument("--notes", default=None)
 
     p_exec = subparsers.add_parser(
-        "run-command",
+        "run",
         help="Launch a shell command for a run via tmux (async) or synchronously.",
     )
     p_exec.add_argument("session_dir")
@@ -793,14 +876,7 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Disable tmux and run synchronously (blocks until the command finishes).",
     )
-
-    p_override = subparsers.add_parser(
-        "write-override",
-        help="Write Hydra overrides to the override.yaml of a run.",
-    )
-    p_override.add_argument("session_dir")
-    p_override.add_argument("--run-id", type=int, required=True, help="Run ID returned by create-run.")
-    group = p_override.add_mutually_exclusive_group(required=True)
+    group = p_exec.add_mutually_exclusive_group(required=True)
     group.add_argument(
         "--override",
         dest="overrides",
@@ -810,13 +886,6 @@ def parse_args() -> argparse.Namespace:
             "Hydra-style dotted-path override, e.g. --override model.hidden_size=256. "
             "Repeat to set multiple overrides. Converted to YAML via OmegaConf."
         ),
-    )
-    group.add_argument(
-        "--yaml",
-        dest="yaml_content",
-        default=None,
-        metavar="YAML",
-        help="Raw YAML string written verbatim to override.yaml.",
     )
 
     p_poll = subparsers.add_parser(
@@ -832,6 +901,27 @@ def parse_args() -> argparse.Namespace:
         metavar="N",
         help="Include the last N lines of stdout.log in the response. 0 = full log. (default: 50)",
     )
+
+    p_spawn = subparsers.add_parser(
+        "tune",
+        help=(
+            "Spawn a subagent that reads the session context (report, strategy, results summary) "
+            "and decides the next hyperparameter override then run with selected overrides."
+        ),
+    )
+    p_spawn.add_argument("session_dir")
+    p_spawn.add_argument("--run-id", type=int, required=True, help="Run ID the subagent should write the override for.")
+
+    p_analyze = subparsers.add_parser(
+        "analyze-event",
+        help="Analyze all scalar curves in a TensorBoard event file and write event_analysis.json to the run directory.",
+    )
+    p_analyze.add_argument("session_dir")
+    p_analyze.add_argument("--run-id", type=int, required=True, help="Run ID whose directory receives event_analysis.json.")
+    p_analyze.add_argument("--event-path", required=True, metavar="PATH", help="Path to the TensorBoard event file.")
+    p_analyze.add_argument("--smoothing", type=float, default=0.0, metavar="S", help="EMA smoothing factor (default: 0.0).")
+    p_analyze.add_argument("--quantile-low", type=float, default=0.05, metavar="Q", help="Lower quantile for range stats (default: 0.05).")
+    p_analyze.add_argument("--quantile-high", type=float, default=0.95, metavar="Q", help="Upper quantile for range stats (default: 0.95).")
 
     return parser.parse_args()
 
@@ -856,40 +946,31 @@ def main() -> None:
         mgr = SessionManager(session_dir=args.session_dir, ssh_host=args.ssh_host)
         if args.command == "create-run":
             result = mgr.create_run(notes=args.notes)
-        elif args.command == "update-run":
-            result = mgr.update_run_result(
-                run_id=args.run_id,
-                run_name=args.run_name,
-                status=args.status,
-                primary_metric=args.primary_metric,
-                best_step=args.best_step,
-                run_dir=args.run_dir,
-                override_path=args.override_path,
-                config_path=args.config_path,
-                metrics_path=args.metrics_path,
-                summary_path=args.summary_path,
-                start_time=args.start_time,
-                end_time=args.end_time,
-                notes=args.notes,
-            )
-        elif args.command == "summarize-results":
-            result = mgr.summarize_results(top_k=args.top_k, recent_k=args.recent_k, goal=args.goal)
         elif args.command == "append-report":
             result = mgr.append_report(content=args.content)
         elif args.command == "finalize-session":
             result = mgr.finalize_session(status=args.status, ended_at=args.ended_at, notes=args.notes)
-        elif args.command == "write-override":
-            result = mgr.write_override(run_id=args.run_id, overrides=args.overrides, yaml_content=args.yaml_content)
-        elif args.command == "run-command":
-            result = mgr.run_command(
+        elif args.command == "run":
+            result = mgr.override_and_run(
                 run_id=args.run_id,
                 command=args.command_str,
+                overrides=args.overrides,
                 conda_env=args.conda_env,
                 cwd=args.cwd,
                 use_tmux=not args.no_tmux,
             )
         elif args.command == "poll-run":
             result = mgr.poll_run(run_id=args.run_id, tail_lines=args.tail)
+        elif args.command == "tune":
+            result = mgr.tune(run_id=args.run_id)
+        elif args.command == "analyze-event":
+            result = mgr.analyze_event(
+                run_id=args.run_id,
+                event_path=args.event_path,
+                smoothing=args.smoothing,
+                quantile_low=args.quantile_low,
+                quantile_high=args.quantile_high,
+            )
         else:
             raise SessionManagerError(f"Unsupported command: {args.command}")
 
