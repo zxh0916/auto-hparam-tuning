@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import argparse
 import hashlib
 import json
@@ -70,6 +71,7 @@ class SessionManager:
         self.storage: Storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
         self.session_info = {
             "session_dir": self.session_dir,
+            "local_python_executable": sys.executable,
             "storage": "ssh" if self.ssh_host else "local"
         }
         if self.ssh_host:
