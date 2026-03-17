@@ -160,7 +160,7 @@ def summarize_scalar_curve(
     worst_step = min_step if optimization_mode == "higher" else max_step
     worst_value = min_value if optimization_mode == "higher" else max_value
 
-    return {
+    return {k: (f"{v:.3e}" if isinstance(v, float) else v) for k, v in {
         "key": key,
         "mode": optimization_mode,
         "count": int(series.shape[0]),
@@ -193,7 +193,7 @@ def summarize_scalar_curve(
         "oscillation": float(oscillation),
         "normalized_oscillation": float(normalized_oscillation),
         "sign_change_count": int(sign_change_count),
-    }
+    }.items()}
 
 
 def main():
