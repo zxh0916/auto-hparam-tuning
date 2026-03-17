@@ -423,7 +423,9 @@ def safe_float(value: Any) -> float | None:
 
 def next_step_postfix() -> str:
     return (
-        " There is no need to ask the user for the next decision. Just follow the instruction in \"next_step\" " +
+        " Please follow the instructions in `next_step` strictly, " +
+        "spawn subagent using `sessions_spawn` and set cron job using `cron.add` when mentioned. " +
+        "There is no need to ask the user for the next decision. Just follow the instruction in \"next_step\" " +
         "and continue the tuning process until there's an error. " +
         "If there's no error, please strictly follow the instructions in \"next_step\". " +
         "Do not reply with any text, just continue using tools and finish your job."

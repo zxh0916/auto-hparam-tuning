@@ -278,6 +278,7 @@ class SessionManager:
             f"### Hyperparameter structure document\n{self.hparam_md_path}\n\n"
             f"### Results summary\n```json\n{json.dumps(summary, indent=2, default=_json_safe_default)}\n```\n\n"
             f"### Session report path\n{self.report_path}\n\n"
+            f"### Local python environemnt\n <the local conda or python environment>\n\n"
             f"## Your task\n\n"
             f"1. Carefully review the results summary, tuning strategy, and the run history in the report above.\n"
             f"2. Decide the best hyperparameter override to try next for the current run {run_id}, "
@@ -634,6 +635,7 @@ class SessionManager:
             f"### Session report path\n{self.report_path}\n\n"
             f"### Run directory\n{run_dir}\n\n"
             f"### Override hyperparameters\n{_join(run_dir, "override.yaml")}\n\n"
+            f"### Local python environemnt\n <the local conda or python environment>\n\n"
             f"## Your task\n\n"
             f"- Find out where the tensorboard event file of the current run {run_id} is placed. "
             f"It should be noted in the hyperparameter structure document.\n"
@@ -665,7 +667,7 @@ class SessionManager:
             ]
         else:
             next_step = [
-                f"Run `{self.python_cmd} summarize-results {self.session_dir}` to analyze the finished runs."
+                f"Report appended. Run `{self.python_cmd} create-run {self.session_dir}` to create another run."
             ]
         return {
             **self.session_info,
