@@ -1,14 +1,69 @@
-# AHT: Automatic Hyperparameter Tuning with Coding Agents using Hydra
+# AHT: Automatic Hyperparameter Tuning with 🦞OpenClaw
 
-## Installation
+> Tell the agent what to optimize. It reads your project, plans a strategy, runs experiments, and learns from each result — when you are enjoying your coffee.
 
-Clone the repo into your global skill directory:
+**AHT** is an [OpenClaw](https://github.com/openclaw/openclaw) skill that turns a coding agent into an autonomous hyperparameter tuning researcher for any deep learning project built on [Hydra](https://hydra.cc/).
+
+Hyperparameter tuning remains one of the most tedious bottlenecks in deep learning research. Traditional search methods — grid search, random search, and Bayesian optimizers like [Optuna](https://optuna.org/) — treat the hyperparameter space as a black box: they sample configurations, evaluate metrics, and repeat, without ever reading a line of code or understanding *why* a learning rate of 1e-3 works better than 1e-2. Researchers, on the other hand, bring intuition — they read the model, inspect loss curves, and reason about what to try next. But that intuition is expensive: it demands hours of manual intervention and context-switching between experiments.
+
+AHT bridges this gap. It teaches a coding agent to tune hyperparameters the way a researcher would — by reading the project first, then reasoning about what to change — while inheriting the tirelessness of automated search: it runs overnight, manages its own experiment queue, and wakes itself up when a training job finishes.
+
+## Overview
+
+AHT takes a fundamentally different approach. Instead of blind search, it equips a coding agent with the tools to **understand** the project first, then **reason** about what to change next:
+
+1. **Read** — The agent walks through the codebase, parses the Hydra config hierarchy, and produces structured documentation (`PROJECT.md`, `HPARAM.md`) that captures the model architecture, training pipeline, and tunable knobs.
+2. **Plan** — Before any experiment runs, the agent drafts a tuning strategy: which hyperparameters to prioritize, what ranges make sense given the architecture, and what patterns to watch for.
+3. **Run** — Training commands are launched asynchronously in detached tmux sessions (locally or over SSH). The agent polls for completion, estimates ETAs, and uses cron reminders to wake itself up — no human babysitting required.
+4. **Analyze** — After each run, TensorBoard event files are parsed into structured scalar summaries. The agent detects divergence, plateaus, and overfitting, then logs its findings in a cumulative report.
+5. **Learn** — Each subsequent tuning decision is informed by the full run history: past overrides, metric trends, and the agent's own analysis. This closed loop lets the agent refine its strategy over time rather than exploring blindly.
+
+The result is an iterative, context-aware tuning process that combines the rigor of systematic experimentation with the intuition of an experienced researcher — running autonomously from the first experiment to the final report.
+
+## ✨ Features
+
+### Project and config understanding
+
+AHT walks through the target project to identify the entry script, Hydra config structure, and tunable hyperparameters, producing `PROJECT.md` and `HPARAM.md` as structured references for subsequent tuning decisions.
+
+### TensorBoard event analysis
+
+AHT exposes TensorBoard scalar data to the agent, allowing it to detect training patterns such as divergence, plateaus, and overfitting from logged metrics.
+
+### Context-aware tuning with run histories
+
+In each tuning iteration, AHT spawns a subagent with the project overview, historical overrides, tuning strategy, and accumulated results as context, allowing it to learn from past runs and make informed decisions for the next override.
+
+### Async execution with tmux
+
+Training runs are launched in detached tmux sessions (both locally and over SSH), enabling the agent to poll for completion, estimate ETAs, and set cron reminders instead of blocking.
+
+### Experiment history and reporting
+
+AHT maintains a structured session directory (`aht/yyyy-mm-dd/hh-mm-ss/`) with per-run configs, metrics, and analysis. A built-in reporting script can generate summary, Markdown, or HTML reports comparing runs.
+
+## 🔄 Workflow
+
+1. **Understand the project** — Inspect the project structure and Hydra config hierarchy; generate `PROJECT.md` and `HPARAM.md` if missing.
+2. **Understand the run command** — Analyze the user-provided training command to identify active configs, output paths, metric candidates, and relevant hyperparameters.
+3. **Create a session** — Initialize a tuning session with the base command, primary metric, and optimization goal; auto-insert `- override` into the Hydra defaults list.
+4. **Tuning loop** (baseline run + up to *N* iterations):
+   1. Spawn a subagent to decide the best override based on the strategy and run history.
+   2. Launch the run in a detached tmux session.
+   3. Poll the run status; set a cron reminder if still running.
+   4. Once finished, spawn a subagent to analyze the TensorBoard event file and update the report.
+5. **Finalize** — Present the final report and best configuration to the user.
+
+## 🚀 Quick Start
+
+1. Clone the repo into your global skill directory and install the dependencies:
 ```bash
 cd ~/.openclaw/skills
 git clone https://github.com/zxh0916/auto-hparam-tuning.git
+pip install -r auto-hparam-tuning/requirements.txt
 ```
 
-Then modify your openclaw config:
+2. Modify your OpenClaw config:
 ```json
 {
   "skills": {
@@ -25,132 +80,15 @@ Then modify your openclaw config:
 }
 ```
 
-On workstation:
-```bash
-git clone https://github.com/zxh0916/auto-hparam-tuning.git
-pip install -r auto-hparam-tuning/requirements.txt
+### Usage
+
 ```
-
-## Features
-
-- A dedicated `aht-init` preflight sub-skill that checks whether the task already provides the minimum startup info
-- Automatically explore the project and understand the hparams
-- Extract tunable hparams from commands
-- Analyze the critical metrics from the tensorboard event file
-- Judge the run with the metrics
-- Tune the hparam according to the result
-- Start a sweep to search in a smaller hparam space
-- Write tuning logs into disk
-- Create stable AHT session directories under the tuned project, both locally and over SSH
-
-## Session Manager
-
-A lightweight session manager is available at:
-
-```bash
-python skills/auto-hparam-tuning/scripts/session_manager.py --help
+/skill auto-hparam-tuning Please tune the project "/path/to/project" in "some_remote_machine", use the remote conda environment "some_remote_conda_env" and local conda environment "some_local_conda_env".
 ```
-
-It creates a canonical layout under the **target project**:
-
-```text
-<project_root>/aht/yyyy-mm-dd/hh-mm-ss/
-```
-
-Example for a local project:
-
-```bash
-python skills/auto-hparam-tuning/scripts/session_manager.py \
-  create-session /path/to/project \
-  --base-command "python train.py task=foo" \
-  --primary-metric val/acc \
-  --goal maximize
-```
-
-Example for a remote project over SSH:
-
-```bash
-python skills/auto-hparam-tuning/scripts/session_manager.py \
-  --ssh-host user@server \
-  create-session /remote/project/path \
-  --base-command "python train.py task=foo" \
-  --primary-metric val/acc \
-  --goal maximize
-```
-
-Then allocate runs inside that session:
-
-```bash
-python skills/auto-hparam-tuning/scripts/session_manager.py create-run <session_dir>
-python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server create-run <remote_session_dir>
-```
-
-You can also summarize the accumulated run history with pandas before deciding the next tuning move:
-
-```bash
-python skills/auto-hparam-tuning/scripts/session_manager.py summarize-results <session_dir>
-python skills/auto-hparam-tuning/scripts/session_manager.py --ssh-host user@server summarize-results <remote_session_dir>
-```
-
-## CSV Experiment History
-
-The experiment backend now uses the session layout under `<project_root>/aht/` as the source of truth.
-Each session keeps a canonical `results.csv` index plus per-run payloads such as `resolved_config.json`,
-`metrics.json`, `summary.md`, and the session-level `report.md`.
-
-Compatibility helpers that preserve the old experiment-history workflow now read and write this CSV-backed store:
-
-```bash
-python skills/auto-hparam-tuning/scripts/init_experiment_history_db.py --project-root /path/to/project
-python skills/auto-hparam-tuning/scripts/query_experiment_history.py --project-root /path/to/project --limit 20 --format json
-python skills/auto-hparam-tuning/scripts/report_experiment_history.py --project-root /path/to/project summary
-python skills/auto-hparam-tuning/scripts/report_experiment_history.py --project-root /path/to/project report --output-markdown /tmp/report.md --output-html /tmp/report.html
-python skills/auto-hparam-tuning/scripts/iter_next_hparams.py --project-root /path/to/project --base-config-file resolved_config.yaml --search-space-file search_space.yaml --train-command-template 'python train.py --config {config_path} --metrics-out {metrics_path}'
-```
-
-`iter_next_hparams.py` keeps the `exp-launch` planning behavior: it inspects prior runs across the project,
-tries the baseline first, then one-step neighbors of the current best run, then the nearest untried grid point.
-Instead of appending a SQLite row, it records the run into the active AHT session and updates `results.csv`,
-`metrics.json`, `resolved_config.json`, and `report.md`.
-
-## AHT Init Preflight
-
-Before the main tuning flow starts, the `aht-init` sub-skill should be invoked first. It checks whether the conversation/context already contains:
-
-- project path
-- conda environment name
-- reference launch script or command
-- optimization target
-
-If any field is missing, it generates one concise user-facing message that asks only for the missing items. If all fields are present, the main `auto-hparam-tuning` skill can continue into project understanding and session creation.
-
-## Project Understanding
-
-A lightweight project-understanding flow helper is also available:
-
-```bash
-python skills/auto-hparam-tuning/scripts/project_understanding.py inspect-project /path/to/project
-python skills/auto-hparam-tuning/scripts/project_understanding.py prepare-run-understanding /path/to/project "python train.py task=foo"
-python skills/auto-hparam-tuning/scripts/project_understanding.py --ssh-host user@server inspect-project /remote/project/path
-```
-
-### Additional Features
-
-- Convert the non-hydra config system into hydra-based ones
-- Try multiple config in parallel across multiple GPUs
-- A more user-friendly dashboard compare to tensorboard
-
-## Roadmap
-
-- [x] convert pd.DataFrame from tensorboard event file
-- [ ] write some functions to detect patterns from the curves
-- [ ] write a prompt that teaches the agent using hydra
-- [ ] write a prompt guiding the agent to explore the project and understand the hparams (refer to the prompts of `/init` command of coding agents like codex and claude code maybe)
-- [ ] write a prompt that makes the agent filter the hparams according to the command
 
 ## Citing
 
-If you find this project useful in your research please cite hydra and AHT using the following BibTeX entry:
+If you find this project useful in your research, please cite Hydra and AHT using the following BibTeX entries:
 
 ```bibtex
 @Misc{Zhang2026AHT,
