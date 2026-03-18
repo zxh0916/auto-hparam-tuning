@@ -56,6 +56,9 @@ Required tasks:
   - loss weights
   - regularization
   - logging / evaluation cadence
+- Identify **Runtime Truncation Knobs**: how to artificially shorten a run to
+  save time (e.g., `trainer.max_epochs=2`, `trainer.limit_train_batches=0.1`,
+  `max_steps=5000`). Required for a Progressive tuning strategy.
 - Separate:
   - good first-round tuning knobs
   - dangerous / expensive knobs that should not be changed early
@@ -75,6 +78,7 @@ Write a concise structured note into the report after sessions creation with the
 ### Relevant Files
 ### Outputs and TensorBoard
 ### Primary Metric Recommendation
+### Runtime Truncation Knobs
 ### Tuning Knobs for This Session
 ### Safe First Actions
 

@@ -7,7 +7,7 @@ import json
 import shlex
 import subprocess
 from datetime import datetime
-from pathlib import Path
+from pathlib import PurePosixPath, Path
 from typing import Any, Literal, Optional, Union
 
 from omegaconf import OmegaConf
@@ -67,7 +67,7 @@ def _json_safe_default(obj: Any) -> Any:
 class SessionManager:
     def __init__(self, session_dir: str, ssh_host: Optional[str] = None) -> None:
         self.session_dir = session_dir
-        self.project_dir = Path(self.session_dir).parent.parent.parent.resolve().as_posix()
+        self.project_dir = PurePosixPath(self.session_dir).parents[2].as_posix()
         self.ssh_host = ssh_host
         self.storage: Storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
         self.session_info = {
@@ -82,7 +82,7 @@ class SessionManager:
         self.report_path = _join(session_dir, "report.md")
         self.script_path = Path(__file__).resolve()
         self.python_cmd = f"python {self.script_path.as_posix()} {self._ssh_prefix()}"
-        self.eta_cmd = f"python {self.script_path.parent.joinpath("eta.py").as_posix()}"
+        self.eta_cmd = f"python {self.script_path.parent.joinpath('eta.py').as_posix()}"
         self.hparam_md_path = _join(self.project_dir, "HPARAM.md")
         assert self.storage.exists(self.hparam_md_path)
         assert self.storage.exists(_join(self.session_dir, "meta.yaml"))
@@ -240,8 +240,8 @@ class SessionManager:
             "summary_path": _join(run_dir, "summary.md"),
             "copied_dir": copied_dir,
             "next_step": (
-                self.generate_tuning_strategy() if next_id == 0 else "" +
-                f"Run created. Now, start tuning by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}`" +
+                (self.generate_tuning_strategy() if next_id == 0 else "") +
+                f"Run created. Now, start tuning by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}` " +
                 "and spawn a subagent following the instruction."
             )
         }
@@ -254,7 +254,7 @@ class SessionManager:
             get_sessions_spawn_command(
                 label="tuning_strategy_generation",
                 task=(
-                    f"Read and follow the instruction in {str(skill_dir / "prompts" / "plan_tuning_strategy.md")} "+
+                    f"Read and follow the instruction in {str(skill_dir / 'prompts' / 'plan_tuning_strategy.md')} "+
                     f"and write your summary in {self.strategy_path} "+
                     (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
                 )
@@ -626,7 +626,7 @@ class SessionManager:
             f"### Hyperparameter structure document\n{self.hparam_md_path}\n\n"
             f"### Session report path\n{self.report_path}\n\n"
             f"### Run directory\n{run_dir}\n\n"
-            f"### Override hyperparameters\n{_join(run_dir, "override.yaml")}\n\n"
+            f"### Override hyperparameters\n{_join(run_dir, 'override.yaml')}\n\n"
             f"### Local python environemnt\n <the local conda or python environment>\n\n"
             f"## Your task\n\n"
             f"- Find out where the tensorboard event file of the current run {run_id} is placed. "
