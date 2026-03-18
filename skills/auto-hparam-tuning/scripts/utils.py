@@ -247,18 +247,12 @@ def get_sessions_spawn_command(label: str, task: str):
         "task": task,
         "runtime": "subagent",
         "label": label,
-        "agentId": "your agentId",
+        "agentId": "your agentId (use `agents_list` tool to acquire)",
         "mode": "run",
         "cleanup": "delete",
         "thinking": "low"
     }
-    command = "sessions_spawn("
-    for i, (k, v) in enumerate(args.items()):
-        command = command + f"{k}=\"{v}\""
-        if i != len(args) - 1:
-            command = command + ", "
-    command = command + ")"
-    return command
+    return json.dumps(args, ensure_ascii=False)
 
 def get_cron_add_command(name: str, at: str, payload: str):
     args = {

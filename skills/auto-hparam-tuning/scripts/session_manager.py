@@ -308,7 +308,7 @@ class SessionManager:
             "strategy_path": self.strategy_path,
             "summarized_results": summary,
             "next_step": (
-                f"Spawn a subagent to decide the next hyperparameter override: {spawn_cmd}" +
+                f"Spawn a subagent with `sessions_spawn` tool with following args to decide the next hyperparameter override: {spawn_cmd}" +
                 "After spawning, DO NOTHING until the subagent returns." +
                 f"After the subagent returns, poll the run with: " +
                 f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`"
@@ -638,7 +638,11 @@ class SessionManager:
             label=f"aht_analyze_run{run_id}",
             task=task,
         )
-        next_step = f"Run finished. Spawn a subagent to analyze the run and update the report by {spawn_cmd}."
+        next_step = (
+            f"Run finished. Spawn a subagent with `sessions_spawn` tool with following args to analyze the run and update the report: {spawn_cmd}. " +
+            "After spawned, wait until the subagent returns. " +
+            f"Then, run `{self.python_cmd} create-run {self.session_dir}` to create another run."
+        )
         return {
             **self.session_info,
             "run_id": run_id,
