@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import argparse
 import hashlib
@@ -87,7 +88,10 @@ class SessionManager:
         assert self.storage.exists(self.hparam_md_path)
         assert self.storage.exists(_join(self.session_dir, "meta.yaml"))
         self.meta_cfg = OmegaConf.create(self.storage.read_text(_join(self.session_dir, "meta.yaml")))
-
+        
+        self.tuning_model = os.environ.get("AHT_TUNING_MODEL", None)
+        self.analyze_model = os.environ.get("AHT_ANALYZE_MODEL", None)
+    
     @property
     def results_path(self) -> str:
         return _join(self.session_dir, "results.csv")
@@ -279,6 +283,7 @@ class SessionManager:
         spawn_cmd = get_sessions_spawn_command(
             label=f"aht_tune_run{run_id}",
             task=task,
+            model=self.tuning_model
         )
 
         return {
@@ -583,7 +588,8 @@ class SessionManager:
                     f"Read and follow the instruction in {str(skill_dir / 'prompts' / 'plan_tuning_strategy.md')} "+
                     f"and write your summary in {self.strategy_path} "+
                     (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
-                )
+                ),
+                model=self.tuning_model
             ) + 
             "After spawned, wait until the subagent returns. Then, follow the following instructions."
         ]
@@ -644,6 +650,7 @@ class SessionManager:
         spawn_cmd = get_sessions_spawn_command(
             label=f"aht_analyze_run{run_id}",
             task=task,
+            model=self.analyze_model
         )
         next_step = (
             f"Run finished. Spawn a subagent with `sessions_spawn` tool with following args to analyze the run and update the report: {spawn_cmd}. " +

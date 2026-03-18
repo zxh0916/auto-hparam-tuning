@@ -242,7 +242,7 @@ def default_storage(target: TargetSpec) -> Storage:
 def join(root: str, *parts: str) -> str:
     return str(PurePosixPath(root, *parts))
 
-def get_sessions_spawn_command(label: str, task: str):
+def get_sessions_spawn_command(label: str, task: str, model: Optional[str] = None):
     args = {
         "task": task,
         "runtime": "subagent",
@@ -252,6 +252,8 @@ def get_sessions_spawn_command(label: str, task: str):
         "cleanup": "delete",
         "thinking": "low"
     }
+    if model is not None:
+        args["model"] = str(model)
     return json.dumps(args, ensure_ascii=False)
 
 def get_cron_add_command(name: str, at: str, payload: str):

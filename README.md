@@ -102,6 +102,19 @@ pip install -r auto-hparam-tuning/requirements.txt
 /skill auto-hparam-tuning Please tune the project "/path/to/project" in "some_remote_machine", use remote conda environment "some_remote_conda_env" and local conda environment "some_local_conda_env".
 ```
 
+#### Use Different Models for Subagents
+
+You can specify different models for hparam tuning and result analyzation by setting environment variables in `openclaw.json`:
+```json
+{
+  "env": {
+    "AHT_TUNING_MODEL": "minimax/minimax-m2.5",
+    "AHT_ANALYZE_MODEL": "moonshot/kimi-k2.5"
+  }
+}
+```
+Leaving these values unset means using the agent's default model (`agents.list[].model.primary`).
+
 ## 📝 TODO List
 
 - [ ] Add support to Codex and ClaudeCode
