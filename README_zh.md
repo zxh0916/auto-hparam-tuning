@@ -106,6 +106,20 @@ pip install -r auto-hparam-tuning/requirements.txt
 /skill auto-hparam-tuning Please tune the project "/path/to/project" in "some_remote_machine", use remote conda environment "some_remote_conda_env" and local conda environment "some_local_conda_env".
 ```
 
+#### 为子智能体单独设置模型
+
+AHT支持通过在`openclaw.json`中设置环境变量来为负责超参调试和结果分析的子智能体单独指定模型:
+```json
+{
+  "env": {
+    "AHT_TUNING_MODEL": "minimax/minimax-m2.5",
+    "AHT_ANALYZE_MODEL": "moonshot/kimi-k2.5"
+  }
+}
+```
+不填写这些环境变量时OpenClaw会使用当前智能体的默认模型(`agents.list[].model.primary`)。
+
+
 ## 📝 TODO
 
 - [ ] 支持 Codex 和 Claude Code
