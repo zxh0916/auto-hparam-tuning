@@ -305,7 +305,8 @@ class SessionManager:
             next_step = (
                 "Run finished. Now:\n" +
                 (f"- Copy back the tensorboard event file to the `/tmp/run{run_id}_tensorboard_event` using scp.\n") if self.ssh_host is not None else "\n" +
-                f"- Then analyze the tensorboard events by `{self.python_cmd} analyze-event /path/to/event/file`."
+                f"- Then analyze the tensorboard events by "
+                f"`{self.python_cmd} analyze-event {self.session_dir} --event-file /path/to/event/file --run-id {run_id}`."
             )
         else:
             next_step = "Run failed. Now try to figure out what's wrong according to the stdout."
@@ -610,7 +611,7 @@ class SessionManager:
             )
             for k in list(df.columns)
         ]
-        output_path = _join(self.session_dir, "runs", str(run_id), "event_analysis.json")
+        output_path = _join(self.session_dir, "runs", str(run_id), "metrics.json")
         self.storage.write_text(
             output_path,
             json.dumps(results, indent=2, default=_json_safe_default) + "\n",
@@ -636,9 +637,9 @@ class SessionManager:
             f"### Override hyperparameters\n{_join(run_dir, 'override.yaml')}\n\n" +
             f"### Local python environemnt\n <the local conda or python environment>\n\n" +
             f"## Your task\n\n" +
-            f"- Read the tensorboard analysis in `event_analysis_path` and the report in `{self.report_path}`.\n" +
+            f"- Read the tensorboard analysis in `{output_path}` and the report in `{self.report_path}`.\n" +
             strategy_generation_prompt +
-            f"- Then update the report by `{self.python_cmd} append-report \"content\"`."
+            f"- Then update the report by `{self.python_cmd} append-report {self.session_dir} \"content\"`."
         )
         spawn_cmd = get_sessions_spawn_command(
             label=f"aht_analyze_run{run_id}",
@@ -653,7 +654,7 @@ class SessionManager:
             **self.session_info,
             "run_id": run_id,
             "event_path": event_path,
-            "event_analysis_path": output_path,
+            "metrics_path": output_path,
             "next_step": next_step
         }
     
@@ -917,10 +918,10 @@ def parse_args() -> argparse.Namespace:
 
     p_analyze = subparsers.add_parser(
         "analyze-event",
-        help="Analyze all scalar curves in a TensorBoard event file and write event_analysis.json to the run directory.",
+        help="Analyze all scalar curves in a TensorBoard event file and write metrics.json to the run directory.",
     )
     p_analyze.add_argument("session_dir")
-    p_analyze.add_argument("--run-id", type=int, required=True, help="Run ID whose directory receives event_analysis.json.")
+    p_analyze.add_argument("--run-id", type=int, required=True, help="Run ID whose directory receives metrics.json.")
     p_analyze.add_argument("--event-path", required=True, metavar="PATH", help="Path to the TensorBoard event file.")
     p_analyze.add_argument("--smoothing", type=float, default=0.0, metavar="S", help="EMA smoothing factor (default: 0.0).")
     p_analyze.add_argument("--quantile-low", type=float, default=0.05, metavar="Q", help="Lower quantile for range stats (default: 0.05).")
