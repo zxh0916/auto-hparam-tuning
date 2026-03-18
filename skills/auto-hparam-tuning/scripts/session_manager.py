@@ -240,29 +240,10 @@ class SessionManager:
             "summary_path": _join(run_dir, "summary.md"),
             "copied_dir": copied_dir,
             "next_step": (
-                (self.generate_tuning_strategy() if next_id == 0 else "") +
                 f"Run created. Now, start tuning by `{self.python_cmd} tune {self.session_dir} --run-id {next_id}` " +
                 "and spawn a subagent following the instruction."
             )
         }
-    
-    def generate_tuning_strategy(self):
-        self.storage.write_text(self.strategy_path, "")
-        skill_dir = Path(__file__).resolve().parent.parent
-        next_step = [
-            "Spawn a subagent to walk through the project with following command: " + 
-            get_sessions_spawn_command(
-                label="tuning_strategy_generation",
-                task=(
-                    f"Read and follow the instruction in {str(skill_dir / 'prompts' / 'plan_tuning_strategy.md')} "+
-                    f"and write your summary in {self.strategy_path} "+
-                    (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
-                )
-            ) + 
-            "After spawned, wait until the subagent returns. Then, follow the following instructions."
-        ]
-        
-        return "\n".join(next_step)
     
     def tune(self, run_id: int) -> dict[str, Any]:
         """Spawn a subagent to decide the next hyperparameter override for *run_id*.
@@ -314,6 +295,22 @@ class SessionManager:
                 f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`"
             ),
         }
+    
+    def after_run_next_step(
+        self,
+        status: str,
+        run_id: int
+    ):
+        if status == "finished":
+            next_step = (
+                "Run finished. Now:\n" +
+                (f"- Copy back the tensorboard event file to the `/tmp/run{run_id}_tensorboard_event` using scp.\n") if self.ssh_host is not None else "\n" +
+                f"- Then analyze the tensorboard events by `{self.python_cmd} analyze-event /path/to/event/file`."
+            )
+        else:
+            next_step = "Run failed. Now try to figure out what's wrong according to the stdout."
+        return next_step
+        
 
     def override_and_run(
         self,
@@ -440,15 +437,6 @@ class SessionManager:
         status: RunStatus = "finished" if returncode == 0 else "failed"
         self.update_run_result(run_id=run_id, status=status, end_time=end_time)
 
-        next_step: list[str] = []
-        if status == "finished":
-            if self.ssh_host is not None:
-                next_step.append("Copy the event file and the full config file back to local disk.")
-            next_step.append("Run `python scripts/analyze_event.py list-keys /path/to/the/local/event/file` to list scalar keys.")
-            next_step.append("Then run `python scripts/analyze_event.py summarize /path/to/the/local/event/file key1 key2 keyn` to analyze the selected scalar events.")
-        else:
-            next_step.append("Run failed. Now try to figure out what's wrong according to the stdout.")
-
         return {
             **self.session_info,
             "run_id": run_id,
@@ -461,7 +449,7 @@ class SessionManager:
             "start_time": start_time,
             "end_time": end_time,
             "cwd": effective_cwd,
-            "next_step": next_step,
+            "next_step": self.after_run_next_step(status, run_id),
         }
 
     def update_run_result(
@@ -571,15 +559,6 @@ class SessionManager:
         end_time = now_iso()
         self.update_run_result(run_id=run_id, status=status, end_time=end_time)
 
-        if status == "finished":
-            next_step = (
-                "Run finished. Now:\n" +
-                (f"- Copy back the tensorboard event file to the `/tmp/run{run_id}_tensorboard_event` using scp.\n") if self.ssh_host is not None else "\n" +
-                f"- Then analyze the tensorboard events by `{self.python_cmd} analyze-event /path/to/event/file`."
-            )
-        else:
-            next_step = "Run failed. Now try to figure out what's wrong according to the stdout."
-
         return {
             **self.session_info,
             "run_id": run_id,
@@ -589,8 +568,26 @@ class SessionManager:
             "returncode": returncode,
             "end_time": end_time,
             "stdout_tail": self._read_tail(stdout_path, tail_lines),
-            "next_step": next_step,
+            "next_step": self.after_run_next_step(status, run_id),
         }
+    
+    def generate_tuning_strategy(self):
+        self.storage.write_text(self.strategy_path, "")
+        skill_dir = Path(__file__).resolve().parent.parent
+        next_step = [
+            "Spawn a subagent with `sessions_spawn` tool with following args to walk through the project: " + 
+            get_sessions_spawn_command(
+                label="tuning_strategy_generation",
+                task=(
+                    f"Read and follow the instruction in {str(skill_dir / 'prompts' / 'plan_tuning_strategy.md')} "+
+                    f"and write your summary in {self.strategy_path} "+
+                    (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
+                )
+            ) + 
+            "After spawned, wait until the subagent returns. Then, follow the following instructions."
+        ]
+        
+        return "\n".join(next_step)
     
     def analyze_event(
         self,
@@ -618,20 +615,29 @@ class SessionManager:
             output_path,
             json.dumps(results, indent=2, default=_json_safe_default) + "\n",
         )
+        if run_id == 0:
+            skill_dir = Path(__file__).resolve().parent.parent
+            strategy_generation_prompt = (
+                f"- Since the current run is the first run of the session, you should generate a tuning strategy for this session " +
+                f"according to the result. Read and follow the instruction in {str(skill_dir / 'prompts' / 'plan_tuning_strategy.md')} "+
+                f"and write your summary in {self.strategy_path} " +
+                (f"in remote host {self.ssh_host}.\n" if self.ssh_host is not None else ".\n")
+            )
+        else:
+            strategy_generation_prompt = ""
         task = (
-            f"You are a hyperparameter tuning expert assisting an ongoing AHT session{(' on remote machine '+self.ssh_host) if self.ssh_host is not None else ''}.\n\n"
-            f"Now a run has finished. Analyze the run and write a report.\n\n"
-            f"## Context\n\n"
-            f"### Session directory\n{self.session_dir}\n\n"
-            f"### Hyperparameter structure document\n{self.hparam_md_path}\n\n"
-            f"### Session report path\n{self.report_path}\n\n"
-            f"### Run directory\n{run_dir}\n\n"
-            f"### Override hyperparameters\n{_join(run_dir, 'override.yaml')}\n\n"
-            f"### Local python environemnt\n <the local conda or python environment>\n\n"
-            f"## Your task\n\n"
-            f"- Find out where the tensorboard event file of the current run {run_id} is placed. "
-            f"It should be noted in the hyperparameter structure document.\n"
-            f"- Read the analysis in `event_analysis_path` and the report in `{self.report_path}`.\n"
+            f"You are a hyperparameter tuning expert assisting an ongoing AHT session{(' on remote machine '+self.ssh_host) if self.ssh_host is not None else ''}.\n\n" +
+            f"Now a run has finished. Analyze the run and write a report.\n\n" +
+            f"## Context\n\n" +
+            f"### Session directory\n{self.session_dir}\n\n" +
+            f"### Hyperparameter structure document\n{self.hparam_md_path}\n\n" +
+            f"### Session report path\n{self.report_path}\n\n" +
+            f"### Run directory\n{run_dir}\n\n" +
+            f"### Override hyperparameters\n{_join(run_dir, 'override.yaml')}\n\n" +
+            f"### Local python environemnt\n <the local conda or python environment>\n\n" +
+            f"## Your task\n\n" +
+            f"- Read the tensorboard analysis in `event_analysis_path` and the report in `{self.report_path}`.\n" +
+            strategy_generation_prompt +
             f"- Then update the report by `{self.python_cmd} append-report \"content\"`."
         )
         spawn_cmd = get_sessions_spawn_command(
