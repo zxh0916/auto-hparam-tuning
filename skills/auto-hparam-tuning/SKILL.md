@@ -89,7 +89,7 @@ resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remo
 
 ### 4. TUNING LOOP (baseline run 0 + up to BUDGET tuning iterations):
 
-    The main agent drives the outer loop with three commands per iteration.
+    The main agent drives the outer loop.
     Subagents handle tuning decisions and post-run analysis autonomously.
     The main agent MUST BLOCK after each spawn and do nothing until the
     subagent returns.
@@ -97,21 +97,34 @@ resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remo
     a. CREATE RUN:
         {SM} create-run {SESSION_DIR}
         → creates {SESSION_DIR}/runs/{N}/ scaffold files
-        → if N == 0 (first run): automatically spawns a subagent to generate
-          strategy.md by following {SKILL_DIR}/prompts/plan_tuning_strategy.md.
-          BLOCK until that subagent returns before proceeding.
         → next_step tells you to call `tune`
+        NOTE (N == 0 only): Run 0 is a **Micro-Baseline** — instruct the
+        tuning subagent (step b) to append a runtime truncation knob
+        (e.g., `trainer.max_epochs=2`) so the first run is short and cheap.
+        Use `run_understanding.md` → "Runtime Truncation Knobs" to find the
+        correct knob for this project.
 
     b. SPAWN TUNING SUBAGENT:
         {SM} tune {SESSION_DIR} --run-id {N}
         → embeds HPARAM.md, results summary, report, and strategy as context
         → spawns a subagent that:
-            1. Reads the context and decides the best override for run {N}
-            2. Calls `{SM} run {SESSION_DIR} --run-id {N} \
+            1. Reads the context, checks the active phase in strategy.md
+               (if it exists), and decides the best override(s) for run {N}.
+            2. **Checkpoint Resuming (Progressive Strategy only)**: If this
+               is a Phase 2 or Phase 3 run, consider resuming from the best
+               checkpoint of the previous phase to save compute
+               (e.g. `ckpt_path=runs/{PREV_ID}/workspace/checkpoints/epoch=X.ckpt`).
+               Only valid when the changed hyperparameters do NOT alter model
+               architecture or input/output shapes. Safe for: lr, scheduler,
+               weight decay, dropout. NOT safe for: hidden_size, num_layers,
+               optimizer type switch (e.g. Adam→SGD), num_classes, etc.
+            3. Calls `{SM} run {SESSION_DIR} --run-id {N} \
                    --command-str "{BASE_COMMAND}" [--conda-env {CONDA_ENV}] \
                    --override key=value [--override key2=value2 ...]`
-               which writes override.yaml AND launches the command in a detached tmux session
-            3. Returns the chosen override and reasoning to the main agent
+               which writes override.yaml AND launches the command in a
+               detached tmux session.
+            4. Returns the chosen override, reasoning, and phase reference
+               to the main agent.
         → BLOCK until the subagent returns.
         → next_step tells you to call poll-run
 
@@ -120,8 +133,8 @@ resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remo
         → if still running: next_step tells you to estimate remaining time via
           eta.py, then add a cron reminder via `cron.add` and STOP.
           Wait for the cron to wake you; then poll again.
-        → if finished: results.csv is updated automatically, then spawns a subagent
-          that:
+        → if finished: results.csv is updated automatically, then spawns a
+          subagent that:
             1. Locates the TensorBoard event file (path recorded in HPARAM.md)
             2. (remote only) Copies it back with scp
             3. Calls `{SM} analyze-event {SESSION_DIR} --run-id {N} \
@@ -130,8 +143,18 @@ resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remo
             4. Reads the analysis and the current report
             5. Calls `{SM} append-report {SESSION_DIR} "## Run {N} ..."` to log results
           BLOCK until that subagent returns.
+          AFTER N == 0 analysis completes: spawn a subagent to generate
+          `strategy.md` by following {SKILL_DIR}/prompts/plan_tuning_strategy.md,
+          which now has baseline metrics to work with. BLOCK until it returns.
 
-    d. COPYBACK and ANALYZE:
+    d. [PARALLEL EXECUTION — Direct Strategy only]
+        If strategy.md specifies a Direct Strategy AND compute allows
+        (multiple GPUs, or model trains in minutes), the main agent MAY
+        allocate multiple run dirs (repeat step a) and spawn their tuning
+        subagents (step b) concurrently before polling. Wait for all of
+        them to finish before analyzing the batch.
+
+    e. COPYBACK and ANALYZE:
         copy back the event file if using ssh remote machine
         {SM} analyze-event {EVENT_FILE_PATH}
         BLOCK until that subagent returns.

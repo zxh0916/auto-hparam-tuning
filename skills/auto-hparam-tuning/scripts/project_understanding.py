@@ -59,7 +59,7 @@ class ProjectInspector:
                 get_sessions_spawn_command(
                     label="project_walkthrough_summary_generation",
                     task=(
-                        f"Read and follow the instruction in {str(PROMPTS_DIR / "generate_project_md.md")} "+
+                        f"Read and follow the instruction in {str(PROMPTS_DIR / 'generate_project_md.md')} "+
                         f"and write your summary in {project_md_path} "+
                         (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
                     )
@@ -78,7 +78,7 @@ class ProjectInspector:
                 get_sessions_spawn_command(
                     label="hyperparameter_sturcture_summary_generation",
                     task=(
-                        f"Read and follow the instruction in {str(PROMPTS_DIR / "get_hparam_structure.md")} "+
+                        f"Read and follow the instruction in {str(PROMPTS_DIR / 'get_hparam_structure.md')} "+
                         f"and write your summary in {hparam_md_path} "+
                         (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
                     )
@@ -88,8 +88,8 @@ class ProjectInspector:
         if (not self.need_generate_project_md) and (not self.need_generate_hparam_md):
             next_steps.append(
                 "Both project summary and hparam structure exist. "
-                f"Now, read the project summary in {str(PROMPTS_DIR / "generate_project_md.md")} "
-                f"and the hparam structure in {str(PROMPTS_DIR / "get_hparam_structure.md")} "
+                f"Now, read the project summary in {str(PROMPTS_DIR / 'generate_project_md.md')} "
+                f"and the hparam structure in {str(PROMPTS_DIR / 'get_hparam_structure.md')} "
                 "then run `python scripts/project_understanding.py prepare-run-understanding <command>` "
                 "to understant the task to be tuned."
             )
