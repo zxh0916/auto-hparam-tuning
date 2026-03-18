@@ -137,6 +137,10 @@ pip install -r auto-hparam-tuning/requirements.txt
 }
 ```
 
+有任何问题或者想法，欢迎提Issue或者加群讨论：
+
+<img src="imgs/wechat_group_20260318.jpeg" style="zoom:25%;" />
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=zxh0916%2Fauto-hparam-tuning&type=timeline&legend=top-left">
