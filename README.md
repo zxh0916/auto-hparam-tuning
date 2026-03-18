@@ -132,6 +132,10 @@ If you find this project useful in your research, please cite Hydra and AHT usin
 }
 ```
 
+If you have any question, feel free to create an issue or join the wechat group:
+
+<img src="imgs/wechat_group_20260318.jpeg" style="zoom:25%;" />
+
 ## Star History
 
 <a href="https://www.star-history.com/?repos=zxh0916%2Fauto-hparam-tuning&type=timeline&legend=top-left">
