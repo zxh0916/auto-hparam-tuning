@@ -24,10 +24,9 @@ from utils import (
     safe_float,
     now_iso,
     upsert_results_row,
-    system_prompt,
-    get_sessions_spawn_command,
-    get_cron_add_command
+    system_prompt
 )
+from prompt_templates import spawn_subagent, add_cron_job
 from analyze_event import summarize_scalar_curve, event2dataframe
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
@@ -288,7 +287,8 @@ class SessionManager:
             f"4. Report what override you chose and the reasoning behind it.\n"
         )
 
-        spawn_cmd = get_sessions_spawn_command(
+        spawn_cmd = spawn_subagent(
+            self.agent,
             label=f"aht_tune_run{run_id}",
             task=task,
             model=self.tuning_model
@@ -302,7 +302,7 @@ class SessionManager:
             "strategy_path": self.strategy_path,
             "summarized_results": summary,
             "next_step": (
-                f"Spawn a subagent with `sessions_spawn` tool with following args to decide the next hyperparameter override: {spawn_cmd}" +
+                spawn_cmd +
                 "After spawning, DO NOTHING until the subagent returns." +
                 f"After the subagent returns, poll the run with: " +
                 f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`"
@@ -540,15 +540,16 @@ class SessionManager:
             next_step = [
                 "The run is not completed yet. Please estimate the remaining time from stdout_tail, " +
                 f"formalize the remaining time using `{self.eta_cmd}`, " +
-                "then call `cron.add` tool in openclaw with following parameters to remind yourself when it completes:\n" +
-                get_cron_add_command(
+                "then create a cron job to remind yourself when it completes:\n" +
+                add_cron_job(
+                    self.agent,
                     name=f"aht_poll_run{run_id}",
                     at="<result of eta.py>",
                     payload=
                         "According to the remaining time estimation, one AHT run should have finished. " +
                         f"Query the run with `{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
                 ) +
-                "\n Note: DO NOT USE SLEEP comamnd to wait. You MUST use `cron.add`."
+                "\n Note: DO NOT USE `SLEEP` comamnd to wait. You MUST use EXACTLY the command above."
             ]
             return {
                 **self.session_info,
@@ -589,8 +590,8 @@ class SessionManager:
         self.storage.write_text(self.strategy_path, "")
         skill_dir = Path(__file__).resolve().parent.parent
         next_step = [
-            "Spawn a subagent with `sessions_spawn` tool with following args to walk through the project: " + 
-            get_sessions_spawn_command(
+            spawn_subagent(
+                self.agent,
                 label="tuning_strategy_generation",
                 task=(
                     f"Read and follow the instruction in {str(skill_dir / 'prompts' / 'plan_tuning_strategy.md')} "+
@@ -655,13 +656,14 @@ class SessionManager:
             strategy_generation_prompt +
             f"- Then update the report by `{self.python_cmd} append-report {self.session_dir} \"content\"`."
         )
-        spawn_cmd = get_sessions_spawn_command(
+        spawn_cmd = spawn_subagent(
+            self.agent,
             label=f"aht_analyze_run{run_id}",
             task=task,
             model=self.analyze_model
         )
         next_step = (
-            f"Run finished. Spawn a subagent with `sessions_spawn` tool with following args to analyze the run and update the report: {spawn_cmd}. " +
+            f"Run finished. " + spawn_cmd +
             "After spawned, wait until the subagent returns. " +
             f"Then, run `{self.python_cmd} create-run {self.session_dir}` to create another run."
         )
