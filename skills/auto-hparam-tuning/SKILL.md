@@ -22,8 +22,9 @@ This skill will automatically the hyperparameters managed by hydra config system
 
 0. Run the `aht-init` sub-skill first.
    - Collect and normalize the minimum required inputs: project path, conda env, reference training launch script/method, and optimization target.
+   - Identify the internal `calling_agent` as one of: `codex`, `claudecode`, or `openclaw`.
    - Reuse anything already provided in the current conversation/context as provisional values.
-   - Always send a user-facing confirmation message covering all four fields, even if they appear inferable.
+   - Always send a user-facing confirmation message covering the four user fields, even if they appear inferable.
    - Stop and wait for the user's confirmation or corrections.
    - Only continue into the workflow below after the initialization info has been explicitly confirmed.
 
@@ -50,7 +51,7 @@ This skill will automatically the hyperparameters managed by hydra config system
 
 ## Understand the Project and Create the Session
 
-Before tuning the hparam of the project, you should always make sure that the `aht-init` step has already produced and the user has explicitly confirmed these four fields: project path, conda env name, reference training launch method/script, and optimization target.
+Before tuning the hparam of the project, you should always make sure that the `aht-init` step has already produced and the user has explicitly confirmed these four fields: project path, conda env name, reference training launch method/script, and optimization target. The `aht-init` step must also determine the internal `calling_agent` value (`codex`, `claudecode`, or `openclaw`) for downstream session metadata.
 
 ## Pipeline Algorithm
 
@@ -79,7 +80,8 @@ resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remo
         --base-command "{BASE_COMMAND}" \
         --primary-metric {METRIC} \
         --goal {GOAL} \
-        --primary-config-path {PRIMARY_CONFIG_PATH}
+        --primary-config-path {PRIMARY_CONFIG_PATH} \
+        --agent {CALLING_AGENT}
         → creates {SESSION_DIR} = {PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/
         → auto-inserts `- override` into the primary config's defaults list
         → next_step tells you to call append-report

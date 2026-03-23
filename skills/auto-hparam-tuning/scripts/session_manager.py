@@ -88,6 +88,10 @@ class SessionManager:
         assert self.storage.exists(self.hparam_md_path)
         assert self.storage.exists(_join(self.session_dir, "meta.yaml"))
         self.meta_cfg = OmegaConf.create(self.storage.read_text(_join(self.session_dir, "meta.yaml")))
+        self.agent = self.meta_cfg.get("agent", "openclaw")
+        self.skill = self.meta_cfg.get("skill", "auto-hparam-tuning")
+        self.session_info["agent"] = self.agent
+        self.session_info["skill"] = self.skill
         
         self.tuning_model = os.environ.get("AHT_TUNING_MODEL", None)
         self.analyze_model = os.environ.get("AHT_ANALYZE_MODEL", None)
@@ -151,6 +155,8 @@ class SessionManager:
             "base_command": base_command,
             "primary_metric": primary_metric,
             "goal": goal,
+            "agent": agent,
+            "skill": skill,
             "status": "running",
             "notes": notes,
             "storage": "ssh" if ssh_host else "local",
@@ -170,6 +176,8 @@ class SessionManager:
             "meta_yaml": _join(session_dir, "meta.yaml"),
             "storage": meta["storage"],
             "ssh_host": ssh_host,
+            "agent": mgr.agent,
+            "skill": mgr.skill,
             "primary_config_path": primary_config_path,
             "override_yaml_path": override_yaml_path,
             "next_step":
