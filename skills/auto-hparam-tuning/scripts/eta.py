@@ -2,7 +2,7 @@
 
 CLI usage
 ---------
-    python scripts/eta.py <remaining>
+    python scripts/eta.py [--cron | --iso8601] <remaining>
 
     <remaining> is a compact duration string composed of one or more
     ``<number><unit>`` tokens (case-insensitive, whitespace optional):
@@ -14,19 +14,27 @@ CLI usage
         1h 30m 45s   → 1 hour 30 minutes 45 seconds
         0.5h         → 30 minutes
 
-    Prints a single UTC ISO 8601 timestamp, e.g. ``2026-03-16T18:45:00Z``.
+    --iso8601  (default) Print a UTC ISO 8601 timestamp, e.g. ``2026-03-16T18:45:00Z``.
+    --cron     Print a one-shot 5-field cron expression in local time, e.g. ``15 20 16 3 *``.
 
 Python usage
 ------------
-    from eta import eta_iso
+    from eta import eta_iso, duration_to_iso8601, duration_to_cron
     from datetime import timedelta
 
     print(eta_iso(timedelta(hours=1, minutes=30)))
     # → '2026-03-16T18:45:00Z'
+
+    print(duration_to_iso8601("1h30m"))
+    # → '2026-03-16T18:45:00Z'
+
+    print(duration_to_cron("1h30m"))
+    # → '15 20 16 3 *'  (one-shot cron in local time, now + 1h30m)
 """
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -75,25 +83,75 @@ def parse_duration(s: str) -> timedelta:
     return timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print(
-            "Usage: python scripts/eta.py <remaining>\n"
-            "  <remaining>  duration string, e.g. '1h30m', '90m', '3600s'\n"
-            "\n"
-            "Prints the UTC ISO 8601 timestamp for now + remaining.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+def duration_to_cron(s: str) -> str:
+    """Return a one-shot 5-field cron expression (local time) for *now + duration*.
 
-    raw = " ".join(sys.argv[1:])
+    The returned expression pins minute, hour, day-of-month, and month to the
+    target local time, leaving day-of-week as ``*``.  Suitable for a one-shot
+    ``CronCreate`` call (``recurring=False``).
+
+    Seconds in the duration are rounded to the nearest minute (≥30s rounds up).
+
+    Examples::
+
+        duration_to_cron("1m")     → '41 13 24 3 *'  (1 minute from now, local)
+        duration_to_cron("1h30m")  → '11 15 24 3 *'
+        duration_to_cron("90m")    → '11 15 24 3 *'
+    """
+    remaining = parse_duration(s)
+    # Round to nearest minute
+    total_seconds = remaining.total_seconds()
+    total_minutes = int(total_seconds // 60) + (1 if total_seconds % 60 >= 30 else 0)
+    remaining_rounded = timedelta(minutes=total_minutes)
+
+    target = datetime.now() + remaining_rounded  # local time
+    return f"{target.minute} {target.hour} {target.day} {target.month} *"
+
+
+def duration_to_iso8601(s: str) -> str:
+    """Return a UTC ISO 8601 timestamp string for *now + duration*.
+
+    Examples::
+
+        duration_to_iso8601("1h30m") → '2026-03-24T12:15:00Z'
+        duration_to_iso8601("90m")   → '2026-03-24T12:15:00Z'
+    """
+    return eta_iso(parse_duration(s))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="eta.py",
+        description="Compute an ETA from a duration string.",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--iso8601",
+        action="store_true",
+        default=True,
+        help="Output a UTC ISO 8601 timestamp (default).",
+    )
+    group.add_argument(
+        "--cron",
+        action="store_true",
+        help="Output a one-shot 5-field cron expression in local time.",
+    )
+    parser.add_argument(
+        "remaining",
+        nargs="+",
+        help="Duration string, e.g. '1h30m', '90m', '3600s'.",
+    )
+    args = parser.parse_args()
+
+    raw = " ".join(args.remaining)
     try:
-        remaining = parse_duration(raw)
+        if args.cron:
+            print(duration_to_cron(raw))
+        else:
+            print(duration_to_iso8601(raw))
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-
-    print(eta_iso(remaining))
 
 
 if __name__ == "__main__":
