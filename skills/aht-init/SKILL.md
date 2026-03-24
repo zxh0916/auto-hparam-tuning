@@ -106,9 +106,7 @@ Then explicitly state that AHT can proceed to project/run understanding.
 
 Only after the user confirms or corrects the initialization info should you continue with the main `auto-hparam-tuning` workflow:
 
-1. inspect project docs / hparam docs
-2. understand the reference run command
-3. create the AHT session
-4. enter baseline run + tuning loop
+1. Read the skill documentation of `auto-hparam-tuning`
+2. Start from `1. UNDERSTAND PROJECT`...
 
 This sub-skill is intentionally small and reusable. It is only responsible for **initial information extraction + explicit user confirmation gate**.
