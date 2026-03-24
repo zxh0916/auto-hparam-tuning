@@ -59,7 +59,7 @@ def add_cron_job(
     elif agent == "claudecode":
         prefix = "Create a cron job with `CronCreate` tool with following args:\n"
         args = {
-            "cron": f"$({eta_command} --cron <duration>)",
+            "cron": f"result of `{eta_command} --cron <duration>`",
             "prompt": payload,
             "recurring": False
         }

@@ -80,7 +80,7 @@ AHT 维护结构化的 session 目录（`aht/yyyy-mm-dd/hh-mm-ss/`），每次�
 ```bash
 git clone https://github.com/zxh0916/auto-hparam-tuning.git
 cd auto-hparam-tuning
-pip install -r auto-hparam-tuning/requirements.txt
+pip install -r requirements.txt
 # 全局安装，软链接创建在 ~/.claude/skills
 bash install_claudecode.sh
 # 或项目级安装，软链接创建在 /path/to/project/.claude/skills

@@ -128,12 +128,13 @@ def main() -> None:
     group.add_argument(
         "--iso8601",
         action="store_true",
-        default=True,
+        default=False,
         help="Output a UTC ISO 8601 timestamp (default).",
     )
     group.add_argument(
         "--cron",
         action="store_true",
+        default=False,
         help="Output a one-shot 5-field cron expression in local time.",
     )
     parser.add_argument(
@@ -147,8 +148,10 @@ def main() -> None:
     try:
         if args.cron:
             print(duration_to_cron(raw))
-        else:
+        elif args.iso8601:
             print(duration_to_iso8601(raw))
+        else:
+            raise ValueError("No output format specified. Use --cron or --iso8601.")
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -155,8 +155,6 @@ class SessionManager:
             "base_command": base_command,
             "primary_metric": primary_metric,
             "goal": goal,
-            "agent": agent,
-            "skill": skill,
             "status": "running",
             "notes": notes,
             "storage": "ssh" if ssh_host else "local",
