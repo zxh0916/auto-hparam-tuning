@@ -79,7 +79,10 @@ AHT maintains a structured session directory (`aht/yyyy-mm-dd/hh-mm-ss/`) with p
 git clone https://github.com/zxh0916/auto-hparam-tuning.git
 cd auto-hparam-tuning
 pip install -r auto-hparam-tuning/requirements.txt
+# global installation, create symlinks in ~/.claude/skills
 bash install_claudecode.sh
+# or project installation, create simlinks in /path/to/project/.claude/skills
+bash install_claudecode.sh /path/to/project
 ```
 
 ### OpenClaw

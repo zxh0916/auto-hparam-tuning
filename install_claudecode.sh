@@ -3,7 +3,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILLS_SRC="$SCRIPT_DIR/skills"
-SKILLS_DST="${HOME}/.claude/skills"
+
+if [ $# -ge 1 ]; then
+    SKILLS_DST="$(realpath "$1")/.claude/skills"
+else
+    SKILLS_DST="${HOME}/.claude/skills"
+fi
 
 mkdir -p "$SKILLS_DST"
 

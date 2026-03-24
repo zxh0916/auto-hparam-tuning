@@ -81,7 +81,10 @@ AHT 维护结构化的 session 目录（`aht/yyyy-mm-dd/hh-mm-ss/`），每次�
 git clone https://github.com/zxh0916/auto-hparam-tuning.git
 cd auto-hparam-tuning
 pip install -r auto-hparam-tuning/requirements.txt
+# 全局安装，软链接创建在 ~/.claude/skills
 bash install_claudecode.sh
+# 或项目级安装，软链接创建在 /path/to/project/.claude/skills
+bash install_claudecode.sh /path/to/project
 ```
 
 ### OpenClaw
@@ -170,7 +173,7 @@ AHT支持通过在`openclaw.json`中设置环境变量来为负责超参调试�
 
 有任何问题或者想法，欢迎提Issue或者加群讨论：
 
-<img src="imgs/wechat_group_20260318.jpeg" style="zoom:25%;" />
+<img src="imgs/wechat_group_20260324.jpg" style="zoom:25%;" />
 
 ## Star History
 
