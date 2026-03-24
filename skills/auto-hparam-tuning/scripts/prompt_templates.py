@@ -13,6 +13,11 @@ def spawn_subagent(
     if agent == "codex":
         return ""
     elif agent == "claudecode":
+        if type == "Explore":
+            task = task + (
+                "You may not have the permission to edit file in disk. " +
+                "Just return the content to be written to the caller agent and ask it to edit for you."
+            )
         prefix = (
             f"Spawn a subagent with `Agent` tool with following args to {description}:\n"
         )
