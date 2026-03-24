@@ -293,6 +293,7 @@ class SessionManager:
             agent=self.agent,
             label=f"aht_tune_run{run_id}",
             task=task,
+            type="hparam-tuner",
             model=self.tuning_model
         )
 
@@ -664,6 +665,7 @@ class SessionManager:
             agent=self.agent,
             label=f"aht_analyze_run{run_id}",
             task=task,
+            type="result-analyzer",
             model=self.analyze_model
         )
         next_step = (
