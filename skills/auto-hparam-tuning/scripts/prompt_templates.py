@@ -2,19 +2,32 @@ from typing import Any, Literal, Optional
 import json
 
 def spawn_subagent(
+    description: str,
     agent: str,
     label: str,
     task: str,
+    type: str = "general-purpose",
     model: Optional[str] = None
 ):
     assert agent in ["codex", "claudecode", "openclaw"]
     if agent == "codex":
         return ""
     elif agent == "claudecode":
-        return ""
+        prefix = (
+            f"Spawn a subagent with `Agent` tool with following args to {description}:\n"
+        )
+        args = {
+            "description": description,
+            "subagent_type": type,
+            "prompt": task,
+            "run_in_background": False
+        }
+        if model is not None:
+            args["model"] = str(model)
+        return prefix + json.dumps(args, ensure_ascii=False)
     else:
         prefix = (
-            "Spawn a subagent with `sessions_spawn` tool with following args:\n"
+            f"Spawn a subagent with `sessions_spawn` tool with following args to {description}:\n"
         )
         args = {
             "task": task,
@@ -32,19 +45,25 @@ def spawn_subagent(
 def add_cron_job(
     agent: str,
     name: str,
-    at: str,
-    payload: str
+    payload: str,
+    eta_command: str
 ):
     assert agent in ["codex", "claudecode", "openclaw"]
     if agent == "codex":
         return ""
     elif agent == "claudecode":
-        return ""
+        prefix = "Create a cron job with `CronCreate` tool with following args:\n"
+        args = {
+            "cron": f"$({eta_command} --cron <duration>)",
+            "prompt": payload,
+            "recurring": False
+        }
+        return prefix + json.dumps(args, ensure_ascii=False)
     else:
         prefix = "Create a cron job with openclaw with following command: "
         args = {
             "name": name,
-            "at": at,
+            "at": f"$({eta_command} --iso8601 <duration>)",
             "session": "main",
             "session-key": "use \"session_status\" tool to acquire",
             "wake": "now",
