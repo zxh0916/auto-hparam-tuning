@@ -11,9 +11,9 @@ from utils import (
     LocalStorage,
     SSHStorage,
     default_storage,
-    join as _join,
-    get_sessions_spawn_command
+    join as _join
 )
+from prompt_templates import spawn_subagent
 
 
 
@@ -48,21 +48,23 @@ class ProjectInspector:
         self.need_generate_project_md = not any(self.docs[key]["exists"] for key in ["claude_md", "agents_md", "agent_md", "project_md"])
         self.need_generate_hparam_md = not self.docs["hparam_md"]["exists"]
     
-    def inspect_project(self) -> dict[str, Any]:
+    def inspect_project(self, agent: str) -> dict[str, Any]:
         next_steps = []
         
         if self.need_generate_project_md:
             project_md_path = _join(self.project_root, "PROJECT.md")
             self.storage.write_text(project_md_path, "")
             next_steps.append(
-                "Spawn a subagent to walk through the project with following command: " + 
-                get_sessions_spawn_command(
+                spawn_subagent(
+                    description="walk through the project and generate a summary",
+                    agent="",
                     label="project_walkthrough_summary_generation",
                     task=(
                         f"Read and follow the instruction in {str(PROMPTS_DIR / 'generate_project_md.md')} "+
                         f"and write your summary in {project_md_path} "+
                         (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
-                    )
+                    ),
+                    type="Explore"
                 )
             )
         else:
@@ -74,14 +76,16 @@ class ProjectInspector:
         if self.need_generate_hparam_md:
             self.storage.write_text(hparam_md_path, "")
             next_steps.append(
-                "Spawn a subagent to explore the hyperparameter structure of the project with following command: " + 
-                get_sessions_spawn_command(
+                spawn_subagent(
+                    description="explore the hyperparameter structure of the project",
+                    agent="",
                     label="hyperparameter_sturcture_summary_generation",
                     task=(
                         f"Read and follow the instruction in {str(PROMPTS_DIR / 'get_hparam_structure.md')} "+
                         f"and write your summary in {hparam_md_path} "+
                         (f" in remote host {self.ssh_host}." if self.ssh_host is not None else ".")
-                    )
+                    ),
+                    type="Explore"
                 )
             )
         
@@ -137,6 +141,7 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_inspect = subparsers.add_parser("inspect-project", help="Check for project-level docs and decide what must be generated.")
+    p_inspect.add_argument("--agent", default="openclaw")
     p_inspect.add_argument("project_root")
 
     p_prepare = subparsers.add_parser("prepare-run-understanding", help="Prepare the command-aware understanding workflow for a run command.")
@@ -150,7 +155,8 @@ def main() -> None:
     args = parse_args()
     pi = ProjectInspector(project_root=args.project_root, ssh_host=args.ssh_host)
     if args.command == "inspect-project":
-        result = pi.inspect_project()
+        assert args.agent in ["openclaw", "codex", "claudecode"]
+        result = pi.inspect_project(args.agent)
     elif args.command == "prepare-run-understanding":
         result = pi.prepare_run_understanding(
             run_command=args.run_command

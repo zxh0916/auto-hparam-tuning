@@ -59,11 +59,11 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
 resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost]
 
 ### 1. UNDERSTAND PROJECT:
-    a. python {SKILL_DIR}/scripts/project_understanding.py[ --ssh-host user@remotehost] inspect-project {PROJECT_DIR}
+    a. python {SKILL_DIR}/scripts/project_understanding.py[ --ssh-host user@remotehost] inspect-project {PROJECT_DIR} --agent `calling_agent`
         → tells you which docs exist, what needs to be generated, and which prompts to use
-    b. Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing
+    b. (Subagent) Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing
         → creates `{PROJECT_DIR}/PROJECT.md` (general project onboarding guide)
-    c. Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing
+    c. (Subagent) Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing
         → creates `{PROJECT_DIR}/HPARAM.md` (Hydra config and hparam guide)
 
 ### 2. UNDERSTAND RUN COMMAND:
