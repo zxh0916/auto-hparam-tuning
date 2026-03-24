@@ -552,7 +552,7 @@ class SessionManager:
                         f"Query the run with `{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
                     eta_command=self.eta_cmd
                 ) +
-                "\n Note: DO NOT USE `SLEEP` comamnd to wait. You MUST use EXACTLY the command above."
+                "\n Note: DO NOT USE `SLEEP` command to wait. You MUST use EXACTLY the command above."
             ]
             return {
                 **self.session_info,
