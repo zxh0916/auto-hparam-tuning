@@ -1,10 +1,10 @@
-# AHT：基于 🦞OpenClaw 的自动超参数调优
+# AHT：基于 Coding Agent 的自动超参数调优
 
 > 你只需要告诉 agent 优化什么，剩下的——读代码、定策略、跑实验、总结经验——它都能自己搞定。你喝咖啡就好。
 
 [English README](README.md)
 
-**一句话介绍：** AHT 是一个 [OpenClaw](https://github.com/openclaw/openclaw) 技能（skill），能让 coding agent 变成你的自动调参助手，适用于任何基于 [Hydra](https://hydra.cc/) 的深度学习项目。
+**一句话介绍：** AHT 是一个 skill，能让 coding agent（如 [OpenClaw](https://github.com/openclaw/openclaw)、[Claude Code](https://code.claude.com/en/overview)、[OpenAI Codex](https://github.com/openai/codex)）变成你的自动调参助手，适用于任何基于 [Hydra](https://hydra.cc/) 的深度学习项目。
 
 ## 为什么需要 AHT？
 
@@ -36,7 +36,7 @@ AHT 不做盲目搜索。它让 agent 先**理解**项目，再**推理**下一�
 | [HKUDS/ClawTeam](https://github.com/HKUDS/ClawTeam) | 多 agent 协作的自主实验 | ✅ | Claude Code / Codex / OpenClaw / nanobot / Cursor / 自定义 CLI agent | 中 |
 | [karpathy/autoresearch](https://github.com/karpathy/autoresearch) | 小型 LLM 训练项目上的自主 ML 实验 | ❌ | - | 独立项目 |
 | [facebookresearch/how-to-autorl](https://github.com/facebookresearch/how-to-autorl) | RL 超参调优 | ❌ | Hydra | 低 |
-| **[AHT](https://github.com/zxh0916/auto-hparam-tuning)** | **Hydra 项目的超参调优** | ✅ | 🦞 **OpenClaw**（更多平台支持中） | **低** |
+| **[AHT](https://github.com/zxh0916/auto-hparam-tuning)** | **Hydra 项目的超参调优** | ✅ | Claude Code、OpenClaw | **低** |
 
 ## ✨ 功能特性
 
@@ -74,8 +74,19 @@ AHT 维护结构化的 session 目录（`aht/yyyy-mm-dd/hh-mm-ss/`），每次�
 
 ## 🚀 快速开始
 
-1. 把仓库克隆到全局 skill 目录，安装依赖：
+### Claude Code
 
+1. 克隆仓库，安装依赖并创建软链接：
+```bash
+git clone https://github.com/zxh0916/auto-hparam-tuning.git
+cd auto-hparam-tuning
+pip install -r auto-hparam-tuning/requirements.txt
+bash install_claudecode.sh
+```
+
+### OpenClaw
+
+1. 把仓库克隆到全局 skill 目录，安装依赖：
 ```bash
 cd ~/.openclaw/skills
 git clone https://github.com/zxh0916/auto-hparam-tuning.git
@@ -103,7 +114,7 @@ pip install -r auto-hparam-tuning/requirements.txt
 ### 用法
 
 ```
-/skill auto-hparam-tuning Please tune the project "/path/to/project" in "some_remote_machine", use remote conda environment "some_remote_conda_env" and local conda environment "some_local_conda_env".
+/auto-hparam-tuning Please tune the project "/path/to/project" in "some_remote_machine", use remote conda environment "some_remote_conda_env" and local conda environment "some_local_conda_env".
 ```
 
 #### 为子智能体单独设置模型
@@ -122,7 +133,13 @@ AHT支持通过在`openclaw.json`中设置环境变量来为负责超参调试�
 
 ## 📝 TODO
 
-- [ ] 支持 Codex 和 Claude Code
+- [ ] 支持 Codex
+  - [ ] 添加在 Codex 中创建 cron job 的 skill
+  - [ ] 编写 subagent 调用 prompt
+- [ ] 支持 Claude Code
+  - [x] 编写 subagent 调用 prompt
+  - [x] 编写创建 cron job 的 prompt
+  - [ ] 配置 subagent 所需权限
 - [ ] 提供工具帮助非 Hydra 项目迁移到 Hydra
 - [ ] 支持为 tuning 和 analyzing subagent 指定模型
 - [ ] ...
