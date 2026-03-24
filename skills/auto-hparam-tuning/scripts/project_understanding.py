@@ -79,7 +79,7 @@ class ProjectInspector:
                 spawn_subagent(
                     description="explore the hyperparameter structure of the project",
                     agent=agent,
-                    label="hyperparameter_sturcture_summary_generation",
+                    label="hyperparameter_structure_summary_generation",
                     task=(
                         f"Read and follow the instruction in {str(PROMPTS_DIR / 'get_hparam_structure.md')} "+
                         f"and write your summary in {hparam_md_path} "+
