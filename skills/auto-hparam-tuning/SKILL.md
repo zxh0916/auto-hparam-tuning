@@ -22,8 +22,9 @@ This skill will automatically the hyperparameters managed by hydra config system
 
 0. Run the `aht-init` sub-skill first.
    - Collect and normalize the minimum required inputs: project path, conda env, reference training launch script/method, and optimization target.
+   - Identify the internal `calling_agent` as one of: `codex`, `claudecode`, or `openclaw`.
    - Reuse anything already provided in the current conversation/context as provisional values.
-   - Always send a user-facing confirmation message covering all four fields, even if they appear inferable.
+   - Always send a user-facing confirmation message covering the four user fields, even if they appear inferable.
    - Stop and wait for the user's confirmation or corrections.
    - Only continue into the workflow below after the initialization info has been explicitly confirmed.
 
@@ -50,7 +51,7 @@ This skill will automatically the hyperparameters managed by hydra config system
 
 ## Understand the Project and Create the Session
 
-Before tuning the hparam of the project, you should always make sure that the `aht-init` step has already produced and the user has explicitly confirmed these four fields: project path, conda env name, reference training launch method/script, and optimization target.
+Before tuning the hparam of the project, you should always make sure that the `aht-init` step has already produced and the user has explicitly confirmed these four fields: project path, conda env name, reference training launch method/script, and optimization target. The `aht-init` step must also determine the internal `calling_agent` value (`codex`, `claudecode`, or `openclaw`) for downstream session metadata.
 
 ## Pipeline Algorithm
 
@@ -58,11 +59,11 @@ resolve SKILL_DIR = absolute path to this SKILL.md's parent directory
 resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remotehost]
 
 ### 1. UNDERSTAND PROJECT:
-    a. python {SKILL_DIR}/scripts/project_understanding.py[ --ssh-host user@remotehost] inspect-project {PROJECT_DIR}
+    a. python {SKILL_DIR}/scripts/project_understanding.py[ --ssh-host user@remotehost] inspect-project {PROJECT_DIR} --agent `calling_agent`
         → tells you which docs exist, what needs to be generated, and which prompts to use
-    b. Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing
+    b. (Subagent) Follow {SKILL_DIR}/prompts/generate_project_md.md if PROJECT.md is missing
         → creates `{PROJECT_DIR}/PROJECT.md` (general project onboarding guide)
-    c. Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing
+    c. (Subagent) Follow {SKILL_DIR}/prompts/get_hparam_structure.md if HPARAM.md is missing
         → creates `{PROJECT_DIR}/HPARAM.md` (Hydra config and hparam guide)
 
 ### 2. UNDERSTAND RUN COMMAND:
@@ -79,7 +80,8 @@ resolve SM = python {SKILL_DIR}/scripts/session_manager.py[ --ssh-host user@remo
         --base-command "{BASE_COMMAND}" \
         --primary-metric {METRIC} \
         --goal {GOAL} \
-        --primary-config-path {PRIMARY_CONFIG_PATH}
+        --primary-config-path {PRIMARY_CONFIG_PATH} \
+        --agent {CALLING_AGENT}
         → creates {SESSION_DIR} = {PROJECT_DIR}/aht/yyyy-mm-dd/hh-mm-ss/
         → auto-inserts `- override` into the primary config's defaults list
         → next_step tells you to call append-report

@@ -24,10 +24,9 @@ from utils import (
     safe_float,
     now_iso,
     upsert_results_row,
-    system_prompt,
-    get_sessions_spawn_command,
-    get_cron_add_command
+    system_prompt
 )
+from prompt_templates import spawn_subagent, add_cron_job
 from analyze_event import summarize_scalar_curve, event2dataframe
 
 SessionStatus = Literal["running", "completed", "stopped", "failed"]
@@ -71,14 +70,21 @@ class SessionManager:
         self.project_dir = PurePosixPath(self.session_dir).parents[2].as_posix()
         self.ssh_host = ssh_host
         self.storage: Storage = _default_storage(TargetSpec(project_root=session_dir, ssh_host=ssh_host))
+        assert self.storage.exists(_join(self.session_dir, "meta.yaml"))
+        self.meta_cfg = OmegaConf.create(self.storage.read_text(_join(self.session_dir, "meta.yaml")))
+        self.agent = self.meta_cfg.get("agent", "openclaw")
+        self.skill = self.meta_cfg.get("skill", "auto-hparam-tuning")
         self.session_info = {
             "session_dir": self.session_dir,
             "local_python_executable": sys.executable,
             "storage": "ssh" if self.ssh_host else "local",
-            "system_prompt": system_prompt()
+            "system_prompt": system_prompt(),
+            "agent": self.agent,
+            "skill": self.skill,
         }
         if self.ssh_host:
             self.session_info["ssh_host"] = self.ssh_host
+        
         self.strategy_path = _join(self.session_dir, "strategy.md")
         self.report_path = _join(session_dir, "report.md")
         self.script_path = Path(__file__).resolve()
@@ -86,8 +92,6 @@ class SessionManager:
         self.eta_cmd = f"python {self.script_path.parent.joinpath('eta.py').as_posix()}"
         self.hparam_md_path = _join(self.project_dir, "HPARAM.md")
         assert self.storage.exists(self.hparam_md_path)
-        assert self.storage.exists(_join(self.session_dir, "meta.yaml"))
-        self.meta_cfg = OmegaConf.create(self.storage.read_text(_join(self.session_dir, "meta.yaml")))
         
         self.tuning_model = os.environ.get("AHT_TUNING_MODEL", None)
         self.analyze_model = os.environ.get("AHT_ANALYZE_MODEL", None)
@@ -170,6 +174,8 @@ class SessionManager:
             "meta_yaml": _join(session_dir, "meta.yaml"),
             "storage": meta["storage"],
             "ssh_host": ssh_host,
+            "agent": mgr.agent,
+            "skill": mgr.skill,
             "primary_config_path": primary_config_path,
             "override_yaml_path": override_yaml_path,
             "next_step":
@@ -280,9 +286,12 @@ class SessionManager:
             f"4. Report what override you chose and the reasoning behind it.\n"
         )
 
-        spawn_cmd = get_sessions_spawn_command(
+        spawn_cmd = spawn_subagent(
+            description=f"analyze and tune the hparams of run {run_id}",
+            agent=self.agent,
             label=f"aht_tune_run{run_id}",
             task=task,
+            type="hparam-tuner",
             model=self.tuning_model
         )
 
@@ -294,7 +303,7 @@ class SessionManager:
             "strategy_path": self.strategy_path,
             "summarized_results": summary,
             "next_step": (
-                f"Spawn a subagent with `sessions_spawn` tool with following args to decide the next hyperparameter override: {spawn_cmd}" +
+                spawn_cmd +
                 "After spawning, DO NOTHING until the subagent returns." +
                 f"After the subagent returns, poll the run with: " +
                 f"`{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`"
@@ -532,15 +541,16 @@ class SessionManager:
             next_step = [
                 "The run is not completed yet. Please estimate the remaining time from stdout_tail, " +
                 f"formalize the remaining time using `{self.eta_cmd}`, " +
-                "then call `cron.add` tool in openclaw with following parameters to remind yourself when it completes:\n" +
-                get_cron_add_command(
+                "then create a cron job to remind yourself when it completes:\n" +
+                add_cron_job(
+                    self.agent,
                     name=f"aht_poll_run{run_id}",
-                    at="<result of eta.py>",
                     payload=
                         "According to the remaining time estimation, one AHT run should have finished. " +
                         f"Query the run with `{self.python_cmd} poll-run {self.session_dir} --run-id {run_id}`",
+                    eta_command=self.eta_cmd
                 ) +
-                "\n Note: DO NOT USE SLEEP comamnd to wait. You MUST use `cron.add`."
+                "\n Note: DO NOT USE `SLEEP` command to wait. You MUST use EXACTLY the command above."
             ]
             return {
                 **self.session_info,
@@ -581,8 +591,9 @@ class SessionManager:
         self.storage.write_text(self.strategy_path, "")
         skill_dir = Path(__file__).resolve().parent.parent
         next_step = [
-            "Spawn a subagent with `sessions_spawn` tool with following args to walk through the project: " + 
-            get_sessions_spawn_command(
+            spawn_subagent(
+                description="generate hparam tuning strategy",
+                agent=self.agent,
                 label="tuning_strategy_generation",
                 task=(
                     f"Read and follow the instruction in {str(skill_dir / 'prompts' / 'plan_tuning_strategy.md')} "+
@@ -647,13 +658,16 @@ class SessionManager:
             strategy_generation_prompt +
             f"- Then update the report by `{self.python_cmd} append-report {self.session_dir} \"content\"`."
         )
-        spawn_cmd = get_sessions_spawn_command(
+        spawn_cmd = spawn_subagent(
+            description=f"analyze the tuning result of run {run_id}",
+            agent=self.agent,
             label=f"aht_analyze_run{run_id}",
             task=task,
+            type="result-analyzer",
             model=self.analyze_model
         )
         next_step = (
-            f"Run finished. Spawn a subagent with `sessions_spawn` tool with following args to analyze the run and update the report: {spawn_cmd}. " +
+            f"Run finished. " + spawn_cmd +
             "After spawned, wait until the subagent returns. " +
             f"Then, run `{self.python_cmd} create-run {self.session_dir}` to create another run."
         )

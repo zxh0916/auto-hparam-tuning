@@ -1,10 +1,10 @@
-# AHT: Automatic Hyperparameter Tuning with 🦞OpenClaw
+# AHT: Automatic Hyperparameter Tuning with Coding Agents
 
 > Tell the agent what to optimize. It reads your project, plans a strategy, runs experiments, and learns from each result — when you are enjoying your coffee.
 
 [中文版 Readme](README_zh.md)
 
-**TL;DR: AHT** is an [OpenClaw](https://github.com/openclaw/openclaw) skill that turns a coding agent into an autonomous hyperparameter tuning researcher for any deep learning project built on [Hydra](https://hydra.cc/).
+**TL;DR: AHT** is a skill that turns a coding agent (e.g., [OpenClaw](https://github.com/openclaw/openclaw), [Claude Code](https://code.claude.com/en/overview), and [OpenAI Codex](https://github.com/openai/codex)) into an autonomous hyperparameter tuning researcher for any deep learning project built on [Hydra](https://hydra.cc/).
 
 Hyperparameter tuning remains one of the most tedious bottlenecks in deep learning research. Traditional search methods — grid search, random search, and Bayesian optimizers like [Optuna](https://optuna.org/) — treat the hyperparameter space as a black box: they sample configurations, evaluate metrics, and repeat, without ever reading a line of code or understanding *why* a learning rate of 1e-3 works better than 1e-2. Researchers, on the other hand, bring intuition — they read the model, inspect loss curves, and reason about what to try next. But that intuition is expensive: it demands hours of manual intervention and context-switching between experiments.
 
@@ -34,7 +34,7 @@ Compare to existing autoresearch-like approaches, AHT occupies a very specific p
 | [HKUDS/ClawTeam](https://github.com/HKUDS/ClawTeam) | multi-agent orchestration for autonomous experiments | ✅ | Claude Code / Codex / OpenClaw / nanobot / Cursor / custom CLI agents | Medium |
 | [karpathy/autoresearch](https://github.com/karpathy/autoresearch) | autonomous ML experimentation on a small LLM training repo | ❌ | - | It's an independent project |
 | [facebookresearch/how-to-autorl](https://github.com/facebookresearch/how-to-autorl) | RL hparam tuning | ❌ | Hydra | Low |
-| **[AHT](https://github.com/zxh0916/auto-hparam-tuning)** | **hparam tuning for Hydra projects** | ✅ | 🦞 **OpenClaw** (more on the way) | **Low** |
+| **[AHT](https://github.com/zxh0916/auto-hparam-tuning)** | **hparam tuning for Hydra projects** | ✅ | Claude Code, OpenClaw | **Low** |
 
 ## ✨ Features
 
@@ -72,6 +72,21 @@ AHT maintains a structured session directory (`aht/yyyy-mm-dd/hh-mm-ss/`) with p
 
 ## 🚀 Quick Start
 
+### Claude Code
+
+1. Clone the repo and create symlinks to claude code skills directory:
+```bash
+git clone https://github.com/zxh0916/auto-hparam-tuning.git
+cd auto-hparam-tuning
+pip install -r requirements.txt
+# global installation, create symlinks in ~/.claude/skills
+bash install_claudecode.sh
+# or project installation, create symlinks in /path/to/project/.claude/skills
+bash install_claudecode.sh /path/to/project
+```
+
+### OpenClaw
+
 1. Clone the repo into your global skill directory and install the dependencies:
 ```bash
 cd ~/.openclaw/skills
@@ -99,7 +114,7 @@ pip install -r auto-hparam-tuning/requirements.txt
 ### Usage
 
 ```
-/skill auto-hparam-tuning Please tune the project "/path/to/project" in "some_remote_machine", use remote conda environment "some_remote_conda_env" and local conda environment "some_local_conda_env".
+/auto-hparam-tuning Please tune the project "/path/to/project" in "some_remote_machine", use remote conda environment "some_remote_conda_env" and local conda environment "some_local_conda_env".
 ```
 
 #### Use Different Models for Subagents
@@ -117,7 +132,13 @@ Leaving these values unset means using the agent's default model (`agents.list[]
 
 ## 📝 TODO List
 
-- [ ] Add support to Codex and ClaudeCode
+- [ ] Add support to Codex
+  - [ ] Add a skill to create cron jobs in Codex
+  - [ ] Write subagent spawning prompt
+- [ ] Add support to Claude Code
+  - [x] Write subagent spawning prompt
+  - [x] Write cron job creating prompt
+  - [ ] Set permissions for the skill
 - [ ] Add a helper to transfer an existing non-hydra project into hydra-based one
 - [ ] Add support to specify model for tuning and analyzing subagents
 - [ ] ...
@@ -147,7 +168,7 @@ If you find this project useful in your research, please cite Hydra and AHT usin
 
 If you have any question, feel free to create an issue or join the wechat group:
 
-<img src="imgs/wechat_group_20260318.jpeg" style="zoom:25%;" />
+<img src="imgs/wechat_group_20260324.jpg" style="zoom:25%;" />
 
 ## Star History
 

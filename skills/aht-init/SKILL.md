@@ -11,12 +11,16 @@ Its job is to gather the minimum initialization information, present the concret
 
 ## Required Fields
 
-Collect and confirm these four items:
+Collect and confirm these four user-provided items:
 
 1. **Project path**: the target project root path
 2. **Environment**: the runtime environment or conda environment name used to run training
 3. **Reference training launch method**: the launch script or exact training invocation to tune
 4. **Optimization target**: the metric/objective to optimize, ideally with direction (`maximize`/`minimize`)
+
+Also identify one internal runtime field before handing off to the main AHT workflow:
+
+5. **Calling agent**: detect whether the skill is currently being invoked by `codex`, `claudecode`, or `openclaw`
 
 ## Core Rules
 
@@ -24,16 +28,23 @@ Collect and confirm these four items:
    - Reuse values already present in the current conversation, task context, pasted command, or provided script path.
    - If a value can be inferred directly from the supplied command or path, treat it as a candidate value.
 
-2. **Always ask for confirmation before execution.**
-   - Even if all four fields appear available, do **not** proceed directly.
+2. **Detect the calling agent before handoff.**
+   - Determine whether the current caller is `codex`, `claudecode`, or `openclaw`.
+   - Prefer explicit runtime/context signals over guesswork.
+   - If multiple signals conflict, choose the most direct one from the current runtime/tooling context and note low confidence internally.
+   - If no reliable signal is available, default to `openclaw`.
+
+3. **Always ask for confirmation before execution.**
+   - Even if all four user fields appear available, do **not** proceed directly.
    - Always send one user-facing confirmation message that shows the current values and asks the user to confirm or update them.
    - Treat unconfirmed inferred values as provisional.
+   - The detected `calling_agent` is internal metadata; do not ask the user to confirm it unless they specifically ask.
 
-3. **Block AHT until the user responds.**
+4. **Block AHT until the user responds.**
    - After sending the confirmation request, stop and wait.
    - Continue to the main `auto-hparam-tuning` workflow only after the user explicitly confirms the values or provides corrections.
 
-4. **Keep normalization minimal.**
+5. **Keep normalization minimal.**
    - Preserve the user's wording when possible.
    - Normalize only enough to make downstream AHT steps unambiguous.
 
@@ -69,6 +80,7 @@ Produce a short readiness summary containing:
 - `reference_command`
 - `optimization_target`
 - `goal` (`maximize` or `minimize`, if derivable)
+- `calling_agent` (`codex`, `claudecode`, or `openclaw`)
 
 Then explicitly state that AHT can proceed to project/run understanding.
 
@@ -85,14 +97,16 @@ Then explicitly state that AHT can proceed to project/run understanding.
   - optimization target: `val/loss`
   - goal: `minimize`
 - If the metric name is given without direction and direction is not obvious, keep the metric and leave the direction as part of the confirmation request.
+- For `calling_agent`, use runtime/context/tooling signals such as:
+  - `codex` if the current runtime or harness is clearly Codex
+  - `claudecode` if the caller is clearly Claude Code
+  - `openclaw` if invoked directly in OpenClaw or if no stronger signal is available
 
 ## Handoff to Main AHT Skill
 
 Only after the user confirms or corrects the initialization info should you continue with the main `auto-hparam-tuning` workflow:
 
-1. inspect project docs / hparam docs
-2. understand the reference run command
-3. create the AHT session
-4. enter baseline run + tuning loop
+1. Read the skill documentation of `auto-hparam-tuning`
+2. Start from `1. UNDERSTAND PROJECT`...
 
 This sub-skill is intentionally small and reusable. It is only responsible for **initial information extraction + explicit user confirmation gate**.

@@ -242,38 +242,6 @@ def default_storage(target: TargetSpec) -> Storage:
 def join(root: str, *parts: str) -> str:
     return str(PurePosixPath(root, *parts))
 
-def get_sessions_spawn_command(label: str, task: str, model: Optional[str] = None):
-    args = {
-        "task": task,
-        "runtime": "subagent",
-        "label": label,
-        "agentId": "your agentId (use `agents_list` tool to acquire)",
-        "mode": "run",
-        "cleanup": "delete",
-        "thinking": "low"
-    }
-    if model is not None:
-        args["model"] = str(model)
-    return json.dumps(args, ensure_ascii=False)
-
-def get_cron_add_command(name: str, at: str, payload: str):
-    args = {
-        "name": name,
-        "at": at,
-        "session": "main",
-        "session-key": "use \"session_status\" tool to acquire",
-        "wake": "now",
-        "system-event": payload
-    }
-    command = "`openclaw cron add "
-    for k, v in args.items():
-        if k in ["name", "at", "system-event"] :
-            command = command + f" --{k} \"{v}\""
-        else:
-            command = command + f" --{k} {v}"
-    command = command + " --delete-after-run`"
-    return command
-
 
 def ensure_override_in_defaults(storage: Storage, primary_config_path: str) -> bool:
     """Ensure ``- override`` appears in the ``defaults`` list after ``- _self_``.
