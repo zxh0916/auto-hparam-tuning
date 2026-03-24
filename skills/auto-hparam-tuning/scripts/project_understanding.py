@@ -57,7 +57,7 @@ class ProjectInspector:
             next_steps.append(
                 spawn_subagent(
                     description="walk through the project and generate a summary",
-                    agent="",
+                    agent=agent,
                     label="project_walkthrough_summary_generation",
                     task=(
                         f"Read and follow the instruction in {str(PROMPTS_DIR / 'generate_project_md.md')} "+
@@ -78,7 +78,7 @@ class ProjectInspector:
             next_steps.append(
                 spawn_subagent(
                     description="explore the hyperparameter structure of the project",
-                    agent="",
+                    agent=agent,
                     label="hyperparameter_sturcture_summary_generation",
                     task=(
                         f"Read and follow the instruction in {str(PROMPTS_DIR / 'get_hparam_structure.md')} "+
